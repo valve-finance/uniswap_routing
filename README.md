@@ -9,7 +9,7 @@ This work is part of Uniswap's grant program. It will focus on the Uniswap V2 pr
 * An API that returns the default recommended route and computed optimal route
 
 ## Tentative Schedule by Week
-### May 16 - May 22, 2021 Stagy 1: Groundwork & Project Setup
+### May 16 - May 22, 2021 Stage 1: Groundwork & Project Setup
 - [] Basic Project Setup & Dependency Setup
 - [] Integrate with Uniswap Route API
 ### May 23 - May 29, 2021 Stage 2: Swap Modelling

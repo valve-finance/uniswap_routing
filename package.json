@@ -1,0 +1,39 @@
+{
+  "name": "typescript-node-project-template",
+  "version": "1.0.0",
+  "description": "Tools for Uniswap Route Optimization",
+  "main": "index.js",
+  "dependencies": {
+    "@dagrejs/graphlib": "^2.1.4",
+    "@types/luxon": "^1.26.5",
+    "@types/node": "^14.14.37",
+    "bigdecimal": "^0.6.1",
+    "chalk": "^3.0.0",
+    "commander": "^7.1.0",
+    "dotenv": "^8.2.0",
+    "esm": "^3.2.25",
+    "got": "^11.8.2",
+    "loglevel": "^1.6.6",
+    "loglevel-plugin-prefix": "^0.8.4",
+    "luxon": "^1.27.0"
+  },
+  "devDependencies": {
+    "typescript": "^3.9.3"
+  },
+  "scripts": {
+    "build": "rm -rf ./dist && tsc",
+    "debug": "rm -rf ./dist && tsc && NODE_ENV=development node --inspect -r esm ./dist/index.js",
+    "develop": "rm -rf ./dist && tsc && NODE_ENV=development node -r esm ./dist/index.js",
+    "production": "rm -rf ./dist && tsc && NODE_ENV=production node -r esm ./dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@gitlab.com/AC4TW/typescript-node-project-template.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://gitlab.com/AC4TW/typescript-node-project-template/issues"
+  },
+  "homepage": "https://gitlab.com/AC4TW/typescript-node-project-template#readme"
+}
