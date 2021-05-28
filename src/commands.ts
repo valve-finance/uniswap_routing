@@ -43,8 +43,8 @@ export const getRawPairData = async(options?: any): Promise<any> => {
 
   let _storedAgeLimitExceeded = false
   if (_storedObj && _storedObj.hasOwnProperty('timeMs')) {
-    const _storedInterval = Interval.fromDateTimes(DateTime.now(),
-                                                   DateTime.fromMillis(_storedObj.timeMs))
+    const _storedInterval = Interval.fromDateTimes(DateTime.fromMillis(_storedObj.timeMs),
+                                                   DateTime.now())
     _storedAgeLimitExceeded = _storedInterval.length() > MAX_DATA_AGE.toMillis()
   }
 
@@ -57,6 +57,22 @@ export const getRawPairData = async(options?: any): Promise<any> => {
   }
 
   return _allPairs
+}
+
+/**
+ * 
+ * @param allPairsRaw 
+ * @returns A set of all the symbols, lowercased.
+ */
+export const getUniqueSymbols = (allPairsRaw: any): Set<string> => 
+{
+  const _uniqueSymbols = new Set<string>()
+  for (const _rawPair of allPairsRaw.pairs) {
+    _uniqueSymbols.add(_rawPair.token0.symbol.toLowerCase())
+    _uniqueSymbols.add(_rawPair.token1.symbol.toLowerCase())
+  }
+
+  return _uniqueSymbols
 }
 
 /**
