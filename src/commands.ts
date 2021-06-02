@@ -512,6 +512,7 @@ export const determineRouteCosts = (numPairData: any, routes: any): string =>
     for (const _pair of _route) {
       const _srcSymbolLC = _pair.src
       const _dstSymbolLC = _pair.dst
+      log.debug(`_pair:\n${JSON.stringify(_pair, null, 2)}\n`)
       _routeCostStr += `\n` +
                        `  ${_srcSymbolLC} --> ${_dstSymbolLC}:\n`
 
@@ -529,62 +530,48 @@ export const determineRouteCosts = (numPairData: any, routes: any): string =>
 
             // 1. Get token0 & token1 decimals
             //
-            const token0Decimals = 18
-            const token1Decimals = 18
+            const _token0Decimals = 18
+            const _token1Decimals = 18
 
-            // 1.5 Get normalized reserves (i.e. shift them both to have no decimal
+            // 2 Get normalized reserves (i.e. shift them both to have no decimal
             //     places but be aligned):
             //
-            const _reserve0 = _pairData.reserve0
-            const _reserve1 = _pairData.reserve1
-            const { normReserve0, normReserve1 } = getNormalizedIntReserves(_reserve0, _reserve1)
+            const { normReserve0, normReserve1 } = getNormalizedIntReserves(_pairData.reserve0, _pairData.reserve1)
 
-            // 2. Determine trade direction (i.e. token0 -> token1 OR token1 -> token0)
+            // 2. Construct token objects (except WETH special case)
             //
-            const _srcIsToken0 = _pairData.token0.symbol === _srcSymbolLC
-            const _srcToken: any = _srcIsToken0 ? 
-              { ..._pairData.token0,
-                normReserve: normReserve0, 
-                decimals: token0Decimals } : 
-              { ..._pairData.token1,
-                normReserve: normReserve1,
-                decimals: token1Decimals }
-            const _dstToken: any = _srcIsToken0 ?
-              { ..._pairData.token1,
-                normReserve: normReserve1,
-                decimals: token1Decimals } :
-              { ..._pairData.token0,
-                normReserve: normReserve0,
-                decimals: token0Decimals }
-
-            // 3. Construct token objects (except WETH special case)
-            //
-            log.debug(`Output 1`)
-            const _srcTokenObj = (_srcSymbolLC === 'weth') ? 
+            const _token0 = (_pairData.token0.symbol === 'WETH') ?
               WETH[ChainId.MAINNET] :
-              new Token(ChainId.MAINNET, _srcToken.id, _srcToken.decimals, _srcToken.symbol, _srcToken.name)
-            log.debug(`Output 2`)
-            const _dstTokenObj = (_dstSymbolLC === 'weth') ?
-              WETH[ChainId.MAINNET] :
-              new Token(ChainId.MAINNET, _dstToken.id, _dstToken.decimals, _dstToken.symbol, _dstToken.name)
+              new Token(ChainId.MAINNET,
+                        _pairData.token0.id,
+                        _token0Decimals,
+                        _pairData.token0.symbol,
+                        _pairData.token0.name)
 
-            // 4. Construct pair object after moving amounts correct number of
+            const _token1 = (_pairData.token1.symbol === 'WETH') ?
+              WETH[ChainId.MAINNET] :
+              new Token(ChainId.MAINNET,
+                        _pairData.token1.id,
+                        _token1Decimals,
+                        _pairData.token1.symbol,
+                        _pairData.token1.name)
+
+            // 3. Construct pair object after moving amounts correct number of
             //    decimal places (lookup from tokens in graph)
             //
-            log.debug(`Output 3`)
-            const _pair = new Pair(
-              new TokenAmount(_dstTokenObj, _dstToken.normReserve),
-              new TokenAmount(_srcTokenObj, _srcToken.normReserve) 
-            )
+            const _pair = new Pair( new TokenAmount(_token0, normReserve0), new TokenAmount(_token1, normReserve1) )
 
             // 5. Construct the route & trade objects to determine the price impact.
             //
-            log.debug(`Output 4`)
-            const _route = new Route([_pair], _srcToken)
+            const _srcToken = (_srcSymbolLC === _pairData.token0.symbol.toLowerCase()) ?
+                { obj: _token0, decimals: _token0Decimals } :
+                { obj: _token1, decimals: _token1Decimals }
+
+            const valueTODO = '1'
+            const _route = new Route([_pair], _srcToken.obj)
             const _trade = new Trade(_route,
-                                     new TokenAmount(_srcTokenObj, getNormalizedValue('1', _srcToken.decimals)),
+                                     new TokenAmount(_srcToken.obj, getNormalizedValue(valueTODO, _srcToken.decimals)),
                                      TradeType.EXACT_INPUT)
-            log.debug(`Output 5`)
 
             _routeCostStr += `      Pair ${_pairId}:\n` +
                              `        token0:\n` +
@@ -594,12 +581,12 @@ export const determineRouteCosts = (numPairData: any, routes: any): string =>
                              `          reserve: ${_pairData.reserve0}\n` +
                             //  `          price:   ${_pairData.token0Price}\n` +
                              `        token1:\n` +
-                             `          symbol:  ${_pairData.token0.symbol}\n` +
-                            //  `          name:    ${_pairData.token0.name}\n` +
-                             `          id:      ${_pairData.token0.id}\n` +
-                             `          reserve: ${_pairData.reserve0}\n` +
-                            //  `          price:   ${_pairData.token0Price}\n` +
-                             `        route:     ${_route.path}\n` +
+                             `          symbol:  ${_pairData.token1.symbol}\n` +
+                            //  `          name:    ${_pairData.token1.name}\n` +
+                             `          id:      ${_pairData.token1.id}\n` +
+                             `          reserve: ${_pairData.reserve1}\n` +
+                            //  `          price:   ${_pairData.token1Price}\n` +
+                             `        route:     ${JSON.stringify(_route.path)}\n` +
                              `        route mp:  ${_route.midPrice.toSignificant(6)}\n` +
                              `        exec p:    ${_trade.executionPrice.toSignificant(6)}\n` +
                              `        mid p:     ${_trade.nextMidPrice.toSignificant(6)}\n` +
