@@ -7,14 +7,19 @@ import * as readline from 'readline'
 const log = ds.getLog('index')
 const program = new Command();
 
-const initUniData = async(): Promise<any> => {
+const initUniData = async(force=false): Promise<any> => {
   log.info('Initializing Uniswap data. Please wait (~ 1 min.) ...')
 
-  const _rawPairData: any = await cmds.getRawPairData()
+  const _rawPairData: any = await cmds.getRawPairData({ignorePersisted: force})
   const _symbolLookup: any = cmds. getSymbolLookup(_rawPairData)
   // let _symbolIdLookup: any = cmds.getSymbolIdLookup(_rawPairData)
   // let _idSymbolLookup: any = cmds.getIdSymbolLookup(_rawPairData)
-  const _numPairData: any = await cmds.convertRawToNumericPairData(_rawPairData, {sort: false})
+
+  // const _numPairData: any = await cmds.convertRawToNumericPairData(_rawPairData, {sort: false})
+  // Bypassing conversion to numeric as Uniswap seems to do big int math and push the decimal place 
+  // up (normalize numbers)
+  const _numPairData: any = _rawPairData
+
   // const _numPairData = _rawPairData
   // log.info(`Uniswap V2 Data\n` +
   //          `raw: ${_rawPairData.pairs.length} pairs, ${Object.keys(_symbolIdLookup).length} symbols, ${Object.keys(_idSymbolLookup).length} ids\n` +
@@ -62,7 +67,7 @@ const shell = async(): Promise<void> => {
   const _settings: any = {
     maxHops: {
       description: 'The maximum number of hops allowed by the router.',
-      value: 3,
+      value: 2,
       type: 'integer'
     }
   }
@@ -120,12 +125,15 @@ const shell = async(): Promise<void> => {
 
           const _routeStr = cmds.routesToString(_routes)
           log.info(_routeStr)
+
+          const _routeCostStr = cmds.determineRouteCosts(_uniData.numPairData, _routes)
+          log.info(_routeCostStr)
         }
         break;
       
       case 'r':
         log.info('Refreshing all data ...')
-        _uniData = await initUniData()
+        _uniData = await initUniData(true)
         break;
       
       case 't':

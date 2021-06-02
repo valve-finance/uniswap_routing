@@ -2,6 +2,14 @@ import { DateTime, Interval, Duration } from 'luxon'
 import * as uniGraphV2 from './graphProtocol/uniswapV2'
 import * as ds from './utils/debugScopes'
 import * as p from './utils/persistence'
+import { ChainId,
+         Token,
+         WETH,
+         TokenAmount,
+         Route,
+         Trade,
+         TradeType, 
+         Pair} from '@uniswap/sdk'
 
 // TODO: switch bigdecimal to https://github.com/MikeMcl/bignumber.js/
 //
@@ -25,7 +33,7 @@ export const getRawPairData = async(options?: any): Promise<any> => {
     ignorePersisted: false,
     persist: true
   }
-  const _options = {..._defaultOpts, options}
+  const _options = {..._defaultOpts, ...options}
 
   let _storedObj: any = undefined
   try {
@@ -198,7 +206,7 @@ export const convertRawToNumericPairData = (allPairsRaw: any,
     sort: true,
     descending: true
   }
-  const _options = {..._defaultOpts, options}
+  const _options = {..._defaultOpts, ...options}
 
   const _allPairsNumeric: any = {
     timeMs: allPairsRaw.timeMs,
@@ -212,6 +220,11 @@ export const convertRawToNumericPairData = (allPairsRaw: any,
     _pair.reserveUSD = bigdecimal.BigDecimal(_rawPair.reserveUSD)
     _pair.token0 = _rawPair.token0
     _pair.token1 = _rawPair.token1
+    _pair.token0Price = bigdecimal.BigDecimal(_rawPair.token0Price)
+    _pair.token1Price = bigdecimal.BigDecimal(_rawPair.token1Price)
+
+    // liquidityProviderCount is always zero for some reason in the graph:
+    // _pair.liquidityProviderCount = BigInt(_rawPair.liquidityProviderCount)
 
     _allPairsNumeric.pairs.push(_pair)
   }
@@ -392,10 +405,210 @@ export const routesToString = (routes: any): string =>
   return _routeStr
 }
 
-export const updatePairGraph = async(continuous = false): Promise<any> =>
+// const getSymbolId = (symbolLookup: any, symbolLC: string, pairId: string): string => 
+// {
+//   for (const _symbolId in symbolLookup[symbolLC]) {
+//     try {
+//       const _symbolIdPairs = symbolLookup[symbolLC][_symbolId]
+//       if (_symbolIdPairs.includes(pairId)) {
+//         return _symbolId
+//       }
+//     } catch (ignoredError) {
+//       log.warn(`Failure getting symbol id for ${symbolLC}.\n${ignoredError}`)
+//     }
+//   }
+
+//   return ''
+// }
+
+const zeroString = (numZeros: number):string =>
 {
+  let _zeroStr = ''
+  for (let i = numZeros; i > 0; i--) {
+    _zeroStr += '0'
+  }
+  return _zeroStr
 }
 
-export const findRoutesByAddr = async(fromAddr: string, toAddr: string, maxRoutes: 5): Promise<any> =>
+/**
+ * Removes a decimal place if found and pads out to the correct
+ * number of zeros.
+ *
+ * If no decimal found, adds appropriate number of zeros to make the
+ * decimal place happen.
+ * 
+ * e.g.:  value=1.35, decimals=5, returns:  135000
+ *        value=121, decimals=3, returns: 121000
+ *  
+ * @param value 
+ * @param decimals 
+ * 
+ * TODO: tons of corner cases to handle:
+ *        -  .23
+ *        -  more frac digits than decimals
+ * 
+ */
+const getNormalizedValue = (value: string, decimals: number):string =>
 {
+  const pointIdx = value.indexOf('.')
+  if (pointIdx < 0) {
+    // No point ('.')
+    return value + zeroString(decimals)
+  } else {
+    const fracDigits = value.length - (pointIdx + 1)
+    const padDigits = decimals - fracDigits
+    if (padDigits < 0) {
+      throw new Error(`Too many decimal places in value ${value} for expected decimal places (${decimals})`)
+    }
+
+    return value.replace('.', '') + padDigits
+  }
+}
+
+/**
+ * getNormalizedIntReserves:
+ *   Converts the floating point numbers reserve0 and reserve1 to integer 
+ *   representations with aligned least signfificant digits (padded with zero
+ *   LSDs if required).
+ * 
+ * @param reserve0 A string representing a floating point number. (i.e. '100.23')
+ * @param reserve1 A string representing a floating point number. (i.e. '1000.234')
+ * 
+ * TODO: handle situation where no point ('.')
+ */
+const getNormalizedIntReserves = (reserve0: string, reserve1: string): any =>
+{
+  const _res0FracDigits = reserve0.length - (reserve0.indexOf('.') + 1)
+  const _res1FracDigits = reserve1.length - (reserve1.indexOf('.') + 1)
+
+  if (_res0FracDigits === _res1FracDigits) {
+    return {
+      normReserve0: reserve0.replace('.', ''),
+      normReserve1: reserve1.replace('.', '')
+    }
+  } else if (_res0FracDigits > _res1FracDigits) {
+    const _padDigits = _res0FracDigits - _res1FracDigits
+    return {
+      normReserve0: reserve0.replace('.', ''),
+      normReserve1: reserve1.replace('.', '') + zeroString(_padDigits)
+    }
+  } else {
+    const _padDigits = _res1FracDigits - _res0FracDigits 
+    return {
+      normReserve0: reserve0.replace('.', '') + zeroString(_padDigits),
+      normReserve1: reserve1.replace('.', '')
+    }
+  }
+}
+
+export const determineRouteCosts = (numPairData: any, routes: any): string =>
+{
+  let _routeCostStr = '\n'
+  let _routeNum = 0
+  for (const _route of routes) {
+    _routeCostStr += `\n` +
+                     `Route ${++_routeNum}:\n` +
+                     `----------------------------------------\n`
+    for (const _pair of _route) {
+      const _srcSymbolLC = _pair.src
+      const _dstSymbolLC = _pair.dst
+      _routeCostStr += `\n` +
+                       `  ${_srcSymbolLC} --> ${_dstSymbolLC}:\n`
+
+      for (const _pairId of _pair.pairIds) {
+        // Not needed--in the pair data:
+        // const srcSymbolId = getSymbolId(symbolLookup, _srcSymbolLC, _pairId)
+        // const dstSymbolId = getSymbolId(symbolLookup, _dstSymbolLC, _pairId)
+        let _pairData: any = undefined
+        for (_pairData of numPairData.pairs) {
+          if (_pairData.id === _pairId) {
+            // 0. Future TODO: determine if the pair is invalid b/c the tokens are 
+            //    bad/stale/old.
+            //
+            // TODO TODO ^^^^ TODO TODO
+
+            // 1. Get token0 & token1 decimals
+            //
+            const token0Decimals = 18
+            const token1Decimals = 18
+
+            // 1.5 Get normalized reserves (i.e. shift them both to have no decimal
+            //     places but be aligned):
+            //
+            const _reserve0 = _pairData.reserve0
+            const _reserve1 = _pairData.reserve1
+            const { normReserve0, normReserve1 } = getNormalizedIntReserves(_reserve0, _reserve1)
+
+            // 2. Determine trade direction (i.e. token0 -> token1 OR token1 -> token0)
+            //
+            const _srcIsToken0 = _pairData.token0.symbol === _srcSymbolLC
+            const _srcToken: any = _srcIsToken0 ? 
+              { ..._pairData.token0,
+                normReserve: normReserve0, 
+                decimals: token0Decimals } : 
+              { ..._pairData.token1,
+                normReserve: normReserve1,
+                decimals: token1Decimals }
+            const _dstToken: any = _srcIsToken0 ?
+              { ..._pairData.token1,
+                normReserve: normReserve1,
+                decimals: token1Decimals } :
+              { ..._pairData.token0,
+                normReserve: normReserve0,
+                decimals: token0Decimals }
+
+            // 3. Construct token objects (except WETH special case)
+            //
+            log.debug(`Output 1`)
+            const _srcTokenObj = (_srcSymbolLC === 'weth') ? 
+              WETH[ChainId.MAINNET] :
+              new Token(ChainId.MAINNET, _srcToken.id, _srcToken.decimals, _srcToken.symbol, _srcToken.name)
+            log.debug(`Output 2`)
+            const _dstTokenObj = (_dstSymbolLC === 'weth') ?
+              WETH[ChainId.MAINNET] :
+              new Token(ChainId.MAINNET, _dstToken.id, _dstToken.decimals, _dstToken.symbol, _dstToken.name)
+
+            // 4. Construct pair object after moving amounts correct number of
+            //    decimal places (lookup from tokens in graph)
+            //
+            log.debug(`Output 3`)
+            const _pair = new Pair(
+              new TokenAmount(_dstTokenObj, _dstToken.normReserve),
+              new TokenAmount(_srcTokenObj, _srcToken.normReserve) 
+            )
+
+            // 5. Construct the route & trade objects to determine the price impact.
+            //
+            log.debug(`Output 4`)
+            const _route = new Route([_pair], _srcToken)
+            const _trade = new Trade(_route,
+                                     new TokenAmount(_srcTokenObj, getNormalizedValue('1', _srcToken.decimals)),
+                                     TradeType.EXACT_INPUT)
+            log.debug(`Output 5`)
+
+            _routeCostStr += `      Pair ${_pairId}:\n` +
+                             `        token0:\n` +
+                             `          symbol:  ${_pairData.token0.symbol}\n` +
+                            //  `          name:    ${_pairData.token0.name}\n` +
+                             `          id:      ${_pairData.token0.id}\n` +
+                             `          reserve: ${_pairData.reserve0}\n` +
+                            //  `          price:   ${_pairData.token0Price}\n` +
+                             `        token1:\n` +
+                             `          symbol:  ${_pairData.token0.symbol}\n` +
+                            //  `          name:    ${_pairData.token0.name}\n` +
+                             `          id:      ${_pairData.token0.id}\n` +
+                             `          reserve: ${_pairData.reserve0}\n` +
+                            //  `          price:   ${_pairData.token0Price}\n` +
+                             `        route:     ${_route.path}\n` +
+                             `        route mp:  ${_route.midPrice.toSignificant(6)}\n` +
+                             `        exec p:    ${_trade.executionPrice.toSignificant(6)}\n` +
+                             `        mid p:     ${_trade.nextMidPrice.toSignificant(6)}\n` +
+                             `        impact:    ${_trade.priceImpact.toSignificant(3)}\n`
+          }
+        }
+      }
+    }
+  }
+
+  return _routeCostStr
 }

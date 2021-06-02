@@ -67,6 +67,7 @@ export const getRawPairsV2 = async(fetchAmt: number,
         }
         token0Price
         token1Price
+        liquidityProviderCount
       }
     }`,
     variables: {}
@@ -121,10 +122,8 @@ export const fetchAllRawPairsV2 = async(): Promise<any> =>
     const rawPairData: any = await getRawPairsV2(numPairsToGet, lastId)
 
     if (!rawPairData || !rawPairData.hasOwnProperty('pairs')) {
-      log.warn(`Unexpected request response. No pair data received after `+
-               `fetching ${allRawPairData.pairs.length} pairs.`)
-      numPairsToGet = 0
-      continue
+      throw new Error(`Unexpected request response. No pair data received after `+
+                      `fetching ${allRawPairData.pairs.length} pairs.`)
     }
 
     const { pairs }: any = rawPairData
