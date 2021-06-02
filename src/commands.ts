@@ -2,6 +2,7 @@ import { DateTime, Interval, Duration } from 'luxon'
 import * as uniGraphV2 from './graphProtocol/uniswapV2'
 import * as ds from './utils/debugScopes'
 import * as p from './utils/persistence'
+import * as n from './utils/normalize'
 import { ChainId,
          Token,
          WETH,
@@ -160,86 +161,6 @@ export const getSymbolLookup = (allPairsRaw: any): any =>
   return _symbolLookup
 }
 
-/**
- * 
- * @param allPairsRaw 
- * @returns A map of all the symbols, lowercased, to their ids, lowercased.
- */
-export const getSymbolIdLookup = (allPairsRaw: any): any => 
-{
-  const _symbolToId:any = {}
-  for (const _rawPair of allPairsRaw.pairs) {
-    _symbolToId[_rawPair.token0.symbol.toLowerCase()] = _rawPair.token0.id.toLowerCase()
-    _symbolToId[_rawPair.token1.symbol.toLowerCase()] = _rawPair.token1.id.toLowerCase()
-  }
-
-  return _symbolToId
-}
-
-/**
- * 
- * @param allPairsRaw 
- * @returns A map of all the ids, lowercased, to their symbols, NOT lowercased.
- */
-export const getIdSymbolLookup = (allPairsRaw: any): any => 
-{
-  const _idToSymbol:any = {}
-  for (const _rawPair of allPairsRaw.pairs) {
-    _idToSymbol[_rawPair.token0.id.toLowerCase()] = _rawPair.token0.symbol.toLowerCase()
-    _idToSymbol[_rawPair.token1.id.toLowerCase()] = _rawPair.token1.symbol.toLowerCase()
-  }
-
-  return _idToSymbol
-}
-
-/**
- * convertRawToNumericPairData:
- *    Converts string reserve values of pairs to bigdecimal types and sorts
- *    the pairs.  Default sort is descending by reserve USD amount.
- * 
- * TODO:
- *    - TS types
- */
-export const convertRawToNumericPairData = (allPairsRaw: any, 
-                                            options?: any): any => {
-  const _defaultOpts = {
-    sort: true,
-    descending: true
-  }
-  const _options = {..._defaultOpts, ...options}
-
-  const _allPairsNumeric: any = {
-    timeMs: allPairsRaw.timeMs,
-    pairs: []
-  }
-  for (const _rawPair of allPairsRaw.pairs) {
-    const _pair:any = {}
-    _pair.id = _rawPair.id
-    _pair.reserve0 = bigdecimal.BigDecimal(_rawPair.reserve0)
-    _pair.reserve1 = bigdecimal.BigDecimal(_rawPair.reserve1)
-    _pair.reserveUSD = bigdecimal.BigDecimal(_rawPair.reserveUSD)
-    _pair.token0 = _rawPair.token0
-    _pair.token1 = _rawPair.token1
-    _pair.token0Price = bigdecimal.BigDecimal(_rawPair.token0Price)
-    _pair.token1Price = bigdecimal.BigDecimal(_rawPair.token1Price)
-
-    // liquidityProviderCount is always zero for some reason in the graph:
-    // _pair.liquidityProviderCount = BigInt(_rawPair.liquidityProviderCount)
-
-    _allPairsNumeric.pairs.push(_pair)
-  }
-
-  if (_options.sort) {
-    _allPairsNumeric.pairs.sort((a: any, b: any) => {
-      return (!_options.descending) ?
-        a.reserveUSD.subtract(b.reserveUSD) :
-        b.reserveUSD.subtract(a.reserveUSD)
-    })
-  }
-
-  return _allPairsNumeric
-}
-
 export const constructPairGraph = async(allPairsNumeric: any): Promise<any> =>
 {
   const _g = new graphlib.Graph({directed: false,
@@ -250,18 +171,8 @@ export const constructPairGraph = async(allPairsNumeric: any): Promise<any> =>
   let maxEdgePair = ''
   for (const pair of allPairsNumeric.pairs) {
     const pairId = pair.id.toLowerCase()
-    // const symbol0Id = pair.token0.id.toLowerCase()
-    // const symbol1Id = pair.token1.id.toLowerCase()
-    // _g.setEdge(symbol0Id, symbol1Id, pairId)
-    // _g.setEdge(symbol0Id, symbol1Id, {id: pairId})
-    // _g.setEdge(symbol1Id, symbol0Id, {id: pairId})
-
     const symbol0 = pair.token0.symbol.toLowerCase()
     const symbol1 = pair.token1.symbol.toLowerCase()
-
-
-    // _g.setEdge(symbol0, symbol1, pairId, pairId)  // <-- pairID set for label and edge
-    //                                               // !!! Needed for multigraph
 
     let edges = _g.edge(symbol0, symbol1)
     if (edges) {
@@ -280,9 +191,6 @@ export const constructPairGraph = async(allPairsNumeric: any): Promise<any> =>
     }
     _g.setEdge(symbol0, symbol1, edges)  // <-- pairID set for label and edge
                                           // !!! Needed for multigraph
-
-    // _g.setEdge(symbol0, symbol1, {id: pairId})
-    // _g.setEdge(symbol1, symbol0, {id: pairId})
   }
 
   const edges = _g.edges()
@@ -309,19 +217,15 @@ const _routeSearch = (g: any,
                       originSymbol: string, 
                       destSymbol: string): void => 
 {
-  // log.debug(`_routeSearch: rs: ${routes.length}, r: ${route.length}, h: ${hops}, ${originSymbol} -> ${destSymbol}`)
   if (hops < maxHops) {
     let neighbors = g.neighbors(originSymbol)
     hops++
 
     for (const neighbor of neighbors) {
-      // TODO: handle multiple edges (multi-graph) (first version of this didn't do that)
-      //       as a multi-graph, there will be multiple edges!
+      // Optimization: rather than make this a mulitgraph, represent all pairs in a single edge and
+      //               store their ids as a property of that edge.
       const _route: any = [...route, { src: originSymbol, dst: neighbor, pairIds: g.edge(originSymbol, neighbor).pairIds }]
-      // const _route = [...route, neighbor]
-      //    log.debug(`   _route: ${_route.join(' --> ')}`)
       if (neighbor === destSymbol) {
-        // routes[_route.join(':')]= _route
         routes.push(_route)
       }
 
@@ -337,7 +241,6 @@ const _routeSearch = (g: any,
 *                 Performs a search for routes from one node to another limited
 *                 to maxHops.  Results are stored in routes.
 *
-*                 For example, to initiate a search from 'A' to 'Z':
 */
 const routeSearch = (g: any, originSymbol: string, destSymbol: string, maxHops: number) => 
 {
@@ -405,99 +308,63 @@ export const routesToString = (routes: any): string =>
   return _routeStr
 }
 
-// const getSymbolId = (symbolLookup: any, symbolLC: string, pairId: string): string => 
-// {
-//   for (const _symbolId in symbolLookup[symbolLC]) {
-//     try {
-//       const _symbolIdPairs = symbolLookup[symbolLC][_symbolId]
-//       if (_symbolIdPairs.includes(pairId)) {
-//         return _symbolId
-//       }
-//     } catch (ignoredError) {
-//       log.warn(`Failure getting symbol id for ${symbolLC}.\n${ignoredError}`)
-//     }
-//   }
-
-//   return ''
-// }
-
-const zeroString = (numZeros: number):string =>
+const computeTradeEstimates = (pairData:any, srcSymbolLC:string, dstSymbolLC:string ): any => 
 {
-  let _zeroStr = ''
-  for (let i = numZeros; i > 0; i--) {
-    _zeroStr += '0'
-  }
-  return _zeroStr
-}
+  // 0. Future TODO: determine if the pair is invalid b/c the tokens are 
+  //    bad/stale/old.
+  //
+  // TODO TODO ^^^^ TODO TODO
 
-/**
- * Removes a decimal place if found and pads out to the correct
- * number of zeros.
- *
- * If no decimal found, adds appropriate number of zeros to make the
- * decimal place happen.
- * 
- * e.g.:  value=1.35, decimals=5, returns:  135000
- *        value=121, decimals=3, returns: 121000
- *  
- * @param value 
- * @param decimals 
- * 
- * TODO: tons of corner cases to handle:
- *        -  .23
- *        -  more frac digits than decimals
- * 
- */
-const getNormalizedValue = (value: string, decimals: number):string =>
-{
-  const pointIdx = value.indexOf('.')
-  if (pointIdx < 0) {
-    // No point ('.')
-    return value + zeroString(decimals)
-  } else {
-    const fracDigits = value.length - (pointIdx + 1)
-    const padDigits = decimals - fracDigits
-    if (padDigits < 0) {
-      throw new Error(`Too many decimal places in value ${value} for expected decimal places (${decimals})`)
-    }
+  // 1. Get token0 & token1 decimals
+  //
+  const _token0Decimals = 18
+  const _token1Decimals = 18
 
-    return value.replace('.', '') + padDigits
-  }
-}
+  // 2 Get normalized reserves (i.e. shift them both to have no decimal
+  //     places but be aligned):
+  //
+  const { normReserve0, normReserve1 } =
+    n.getNormalizedIntReserves(pairData.reserve0, pairData.reserve1)
 
-/**
- * getNormalizedIntReserves:
- *   Converts the floating point numbers reserve0 and reserve1 to integer 
- *   representations with aligned least signfificant digits (padded with zero
- *   LSDs if required).
- * 
- * @param reserve0 A string representing a floating point number. (i.e. '100.23')
- * @param reserve1 A string representing a floating point number. (i.e. '1000.234')
- * 
- * TODO: handle situation where no point ('.')
- */
-const getNormalizedIntReserves = (reserve0: string, reserve1: string): any =>
-{
-  const _res0FracDigits = reserve0.length - (reserve0.indexOf('.') + 1)
-  const _res1FracDigits = reserve1.length - (reserve1.indexOf('.') + 1)
+  // 2. Construct token objects (except WETH special case)
+  //
+  const _token0 = (pairData.token0.symbol === 'WETH') ?
+    WETH[ChainId.MAINNET] :
+    new Token(ChainId.MAINNET,
+              pairData.token0.id,
+              _token0Decimals,
+              pairData.token0.symbol,
+              pairData.token0.name)
 
-  if (_res0FracDigits === _res1FracDigits) {
-    return {
-      normReserve0: reserve0.replace('.', ''),
-      normReserve1: reserve1.replace('.', '')
-    }
-  } else if (_res0FracDigits > _res1FracDigits) {
-    const _padDigits = _res0FracDigits - _res1FracDigits
-    return {
-      normReserve0: reserve0.replace('.', ''),
-      normReserve1: reserve1.replace('.', '') + zeroString(_padDigits)
-    }
-  } else {
-    const _padDigits = _res1FracDigits - _res0FracDigits 
-    return {
-      normReserve0: reserve0.replace('.', '') + zeroString(_padDigits),
-      normReserve1: reserve1.replace('.', '')
-    }
+  const _token1 = (pairData.token1.symbol === 'WETH') ?
+    WETH[ChainId.MAINNET] :
+    new Token(ChainId.MAINNET,
+              pairData.token1.id,
+              _token1Decimals,
+              pairData.token1.symbol,
+              pairData.token1.name)
+
+  // 3. Construct pair object after moving amounts correct number of
+  //    decimal places (lookup from tokens in graph)
+  //
+  const _pair = new Pair( new TokenAmount(_token0, normReserve0),
+                          new TokenAmount(_token1, normReserve1) )
+
+  // 5. Construct the route & trade objects to determine the price impact.
+  //
+  const _srcToken = (srcSymbolLC === pairData.token0.symbol.toLowerCase()) ?
+      { obj: _token0, decimals: _token0Decimals } :
+      { obj: _token1, decimals: _token1Decimals }
+
+  const valueTODO = '1'
+  const _route = new Route([_pair], _srcToken.obj)
+  const _trade = new Trade(_route,
+                            new TokenAmount(_srcToken.obj, 
+                                            n.getNormalizedValue(valueTODO, _srcToken.decimals)),
+                            TradeType.EXACT_INPUT)
+  return {
+    route: _route,
+    trade: _trade
   }
 }
 
@@ -512,85 +379,38 @@ export const determineRouteCosts = (numPairData: any, routes: any): string =>
     for (const _pair of _route) {
       const _srcSymbolLC = _pair.src
       const _dstSymbolLC = _pair.dst
-      log.debug(`_pair:\n${JSON.stringify(_pair, null, 2)}\n`)
-      _routeCostStr += `\n` +
-                       `  ${_srcSymbolLC} --> ${_dstSymbolLC}:\n`
+      _routeCostStr += `${_srcSymbolLC} --> ${_dstSymbolLC}:\n`
 
       for (const _pairId of _pair.pairIds) {
-        // Not needed--in the pair data:
-        // const srcSymbolId = getSymbolId(symbolLookup, _srcSymbolLC, _pairId)
-        // const dstSymbolId = getSymbolId(symbolLookup, _dstSymbolLC, _pairId)
-        let _pairData: any = undefined
-        for (_pairData of numPairData.pairs) {
+        for (const _pairData of numPairData.pairs) {
           if (_pairData.id === _pairId) {
-            // 0. Future TODO: determine if the pair is invalid b/c the tokens are 
-            //    bad/stale/old.
-            //
-            // TODO TODO ^^^^ TODO TODO
+            try {
+              const est = computeTradeEstimates(_pairData, _srcSymbolLC, _dstSymbolLC)
 
-            // 1. Get token0 & token1 decimals
-            //
-            const _token0Decimals = 18
-            const _token1Decimals = 18
-
-            // 2 Get normalized reserves (i.e. shift them both to have no decimal
-            //     places but be aligned):
-            //
-            const { normReserve0, normReserve1 } = getNormalizedIntReserves(_pairData.reserve0, _pairData.reserve1)
-
-            // 2. Construct token objects (except WETH special case)
-            //
-            const _token0 = (_pairData.token0.symbol === 'WETH') ?
-              WETH[ChainId.MAINNET] :
-              new Token(ChainId.MAINNET,
-                        _pairData.token0.id,
-                        _token0Decimals,
-                        _pairData.token0.symbol,
-                        _pairData.token0.name)
-
-            const _token1 = (_pairData.token1.symbol === 'WETH') ?
-              WETH[ChainId.MAINNET] :
-              new Token(ChainId.MAINNET,
-                        _pairData.token1.id,
-                        _token1Decimals,
-                        _pairData.token1.symbol,
-                        _pairData.token1.name)
-
-            // 3. Construct pair object after moving amounts correct number of
-            //    decimal places (lookup from tokens in graph)
-            //
-            const _pair = new Pair( new TokenAmount(_token0, normReserve0), new TokenAmount(_token1, normReserve1) )
-
-            // 5. Construct the route & trade objects to determine the price impact.
-            //
-            const _srcToken = (_srcSymbolLC === _pairData.token0.symbol.toLowerCase()) ?
-                { obj: _token0, decimals: _token0Decimals } :
-                { obj: _token1, decimals: _token1Decimals }
-
-            const valueTODO = '1'
-            const _route = new Route([_pair], _srcToken.obj)
-            const _trade = new Trade(_route,
-                                     new TokenAmount(_srcToken.obj, getNormalizedValue(valueTODO, _srcToken.decimals)),
-                                     TradeType.EXACT_INPUT)
-
-            _routeCostStr += `      Pair ${_pairId}:\n` +
-                             `        token0:\n` +
-                             `          symbol:  ${_pairData.token0.symbol}\n` +
-                            //  `          name:    ${_pairData.token0.name}\n` +
-                             `          id:      ${_pairData.token0.id}\n` +
-                             `          reserve: ${_pairData.reserve0}\n` +
-                            //  `          price:   ${_pairData.token0Price}\n` +
-                             `        token1:\n` +
-                             `          symbol:  ${_pairData.token1.symbol}\n` +
-                            //  `          name:    ${_pairData.token1.name}\n` +
-                             `          id:      ${_pairData.token1.id}\n` +
-                             `          reserve: ${_pairData.reserve1}\n` +
-                            //  `          price:   ${_pairData.token1Price}\n` +
-                             `        route:     ${JSON.stringify(_route.path)}\n` +
-                             `        route mp:  ${_route.midPrice.toSignificant(6)}\n` +
-                             `        exec p:    ${_trade.executionPrice.toSignificant(6)}\n` +
-                             `        mid p:     ${_trade.nextMidPrice.toSignificant(6)}\n` +
-                             `        impact:    ${_trade.priceImpact.toSignificant(3)}\n`
+              _routeCostStr += `     pair (${_pairId}):  ${est.trade.priceImpact.toSignificant(3)}\n`
+              // _routeCostStr += `      Pair ${_pairId}:\n` +
+              //                  `        token0:\n` +
+              //                  `          symbol:  ${_pairData.token0.symbol}\n` +
+              //                 //  `          name:    ${_pairData.token0.name}\n` +
+              //                  `          id:      ${_pairData.token0.id}\n` +
+              //                  `          reserve: ${_pairData.reserve0}\n` +
+              //                 //  `          price:   ${_pairData.token0Price}\n` +
+              //                  `        token1:\n` +
+              //                  `          symbol:  ${_pairData.token1.symbol}\n` +
+              //                 //  `          name:    ${_pairData.token1.name}\n` +
+              //                  `          id:      ${_pairData.token1.id}\n` +
+              //                  `          reserve: ${_pairData.reserve1}\n` +
+              //                 //  `          price:   ${_pairData.token1Price}\n` +
+              //                  `        route:     ${JSON.stringify(est.route.path)}\n` +
+              //                  `        route mp:  ${est.route.midPrice.toSignificant(6)}\n` +
+              //                  `        exec p:    ${est.trade.executionPrice.toSignificant(6)}\n` +
+              //                  `        mid p:     ${est.trade.nextMidPrice.toSignificant(6)}\n` +
+              //                  `        impact:    ${est.trade.priceImpact.toSignificant(3)}\n`
+            } catch(error) {
+              log.error(`Failed computing trade estimates for ${_srcSymbolLC} --> ${_dstSymbolLC}:\n` +
+                        `${JSON.stringify(_pairData, null, 2)}\n` +
+                        error)
+            }
           }
         }
       }
