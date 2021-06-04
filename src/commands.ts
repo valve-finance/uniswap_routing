@@ -11,6 +11,7 @@ import { ChainId,
          Trade,
          TradeType, 
          Pair} from '@uniswap/sdk'
+import { parseOptions } from 'commander'
 
 // TODO: switch bigdecimal to https://github.com/MikeMcl/bignumber.js/
 //
@@ -213,7 +214,7 @@ const _routeSearch = (g: any,
                       hops: number, 
                       maxHops: number, 
                       route: any, 
-                      routes: any, 
+                      rolledRoutes: any, 
                       originSymbol: string, 
                       destSymbol: string): void => 
 {
@@ -226,11 +227,11 @@ const _routeSearch = (g: any,
       //               store their ids as a property of that edge.
       const _route: any = [...route, { src: originSymbol, dst: neighbor, pairIds: g.edge(originSymbol, neighbor).pairIds }]
       if (neighbor === destSymbol) {
-        routes.push(_route)
+        rolledRoutes.push(_route)
       }
 
       if (originSymbol !== neighbor) {
-        _routeSearch(g, hops, maxHops, _route, routes, neighbor, destSymbol)
+        _routeSearch(g, hops, maxHops, _route, rolledRoutes, neighbor, destSymbol)
       }
     }
   }
@@ -246,11 +247,11 @@ const routeSearch = (g: any, originSymbol: string, destSymbol: string, maxHops: 
 {
   let hops = 0
   let route: any = []
-  let routes: any = []
+  let rolledRoutes: any = []
 
-  _routeSearch(g, hops, maxHops, route, routes, originSymbol, destSymbol)
+  _routeSearch(g, hops, maxHops, route, rolledRoutes, originSymbol, destSymbol)
 
-  return routes
+  return rolledRoutes
 }
 
 export const findRoutes = async(pairGraph: any,
@@ -280,20 +281,20 @@ export const findRoutes = async(pairGraph: any,
   }
 
   log.info(`Finding routes from token ${tokenSymbolSrc} to token ${tokenSymbolDst} ...`)
-  const routes = routeSearch(pairGraph, _tokenSymbolSrc, _tokenSymbolDst, maxDistance)
-  routes.sort((a: any, b:any) => {
+  const rolledRoutes = routeSearch(pairGraph, _tokenSymbolSrc, _tokenSymbolDst, maxDistance)
+  rolledRoutes.sort((a: any, b:any) => {
     return a.length - b.length    // Ascending order by route length
   })
 
-  return routes
+  return rolledRoutes
 }
 
-export const routesToString = (routes: any): string => 
+export const routesToString = (rolledRoutes: any): string => 
 {
   let _routeStr: string = '\n'
 
   let _routeNum = 0
-  for (const _route of routes) {
+  for (const _route of rolledRoutes) {
     _routeStr += `Route ${++_routeNum}:\n` +
                 `----------------------------------------\n`
     for (const _pair of _route) {
@@ -368,14 +369,17 @@ const computeTradeEstimates = (pairData:any, srcSymbolLC:string, dstSymbolLC:str
   }
 }
 
-export const determineRouteCosts = (numPairData: any, routes: any): string =>
+export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
 {
   let _routeCostStr = '\n'
   let _routeNum = 0
-  for (const _route of routes) {
+  for (const _route of rolledRoutes) {
     _routeCostStr += `\n` +
                      `Route ${++_routeNum}:\n` +
                      `----------------------------------------\n`
+
+    const _measuredRoute:any = []
+
     for (const _pair of _route) {
       const _srcSymbolLC = _pair.src
       const _dstSymbolLC = _pair.dst
@@ -406,6 +410,7 @@ export const determineRouteCosts = (numPairData: any, routes: any): string =>
               //                  `        exec p:    ${est.trade.executionPrice.toSignificant(6)}\n` +
               //                  `        mid p:     ${est.trade.nextMidPrice.toSignificant(6)}\n` +
               //                  `        impact:    ${est.trade.priceImpact.toSignificant(3)}\n`
+              break
             } catch(error) {
               log.error(`Failed computing trade estimates for ${_srcSymbolLC} --> ${_dstSymbolLC}:\n` +
                         `${JSON.stringify(_pairData, null, 2)}\n` +
@@ -418,4 +423,220 @@ export const determineRouteCosts = (numPairData: any, routes: any): string =>
   }
 
   return _routeCostStr
+}
+
+/*
+ * DATATYPES FOR ROUTES
+ *
+ * The 'rolledRoutes' datatype:
+ *
+ *  [                 // Array of routes
+ *    [               // Ordered array of pairs to complete the route (A -> B -> C)
+ *      {
+ *        src:  <symbol>
+ *        dst:  <symbol>
+ *        pairIds: [<pairId>, ...]
+ *      },
+ *      ...
+ *    ]
+ *  ]
+ *
+ * The 'costedRolledRoutes' datatype:
+ * 
+ *  [                 // Array of routes
+ *    [               // Ordered array of pairs to complete the route (A -> B -> C)
+ *      {
+ *        src:  <symbol>
+ *        dst:  <symbol>
+ *        pairs: [ 
+ *          { id: <id>, impact: <% number> }, ...
+ *        ]
+ *      },
+ *      ...
+ *    ]
+ *  ]
+ * 
+ * The 'unrolledRoutes' datatype (note that the pair ids are expanded and each route
+ *                                combination is present)
+ *                    // TODO: make a routes datatype with costs (cheaper than repeating
+ *                    //       for expanded)
+ * 
+ *  [                 // Array of routes
+ *    [               // Ordered array of pairs to complete the route (A -> B -> C)
+ *      {
+ *        src:  <symbol>
+ *        dst:  <symbol>
+ *        pairId: <pairId>
+ *      },
+ *      ...
+ *    ]
+ *  ]
+ * 
+ * The 'costedRoutes' datatype:
+ *  [                                 // Array of routes
+ *    {                               // Route object
+ *      totalImpact: <%age>,          // Sum of all route pair impacts
+ *      numSwaps: <number>,
+ *      routeStr: 'A -> B -> C'
+ *      orderedSwaps: [
+ *        {
+ *          src: 'A',
+ *          dst: 'B',
+ *          id: <pairId>,
+ *          impact: <%age>
+ *        },
+ *        ...
+ *        {
+ *          src: 'B',
+ *          dst: 'C',
+ *          id: <pairId>,
+ *          impact: <%age>
+ *        }
+ *      ]
+ *    }
+ *  ]
+ */
+
+
+/**
+ * costRolledRoutes determines price impact of each individual pair id and
+ * returns a rolledRoute data structure with these costs
+ * 
+ * @param numPairData 
+ * @param rolledRoutes 
+ * 
+ * TODO:
+ *    - improve search efficiency of pair data (log(n) perf vs O(n))
+ *    - cache
+ *    - heuristics
+ */
+export const costRolledRoutes = (numPairData: any,
+                                 rolledRoutes: any): any =>
+{
+  const _costedRolledRoutes :any = []
+
+  for (const _route of rolledRoutes) {
+    const _costedRoute:any = []
+
+    for (const _pair of _route) {
+      const _costedSegment: any = {
+        src: _pair.src,
+        dst: _pair.dst,
+        pairs: []
+      }
+      const _srcSymbolLC = _pair.src.toLowerCase()
+      const _dstSymbolLC = _pair.src.toLowerCase()
+
+      for (const _pairId of _pair.pairIds) {
+
+        for (const _pairData of numPairData.pairs) {
+          if (_pairData.id === _pairId) {
+            try {
+              const est = computeTradeEstimates(_pairData, _srcSymbolLC, _dstSymbolLC)
+              const impact = est.trade.priceImpact.toSignificant(3)
+              _costedSegment.pairs.push({
+                id: _pairId,
+                impact
+              })
+              break
+            } catch(error) {
+              log.error(`Failed computing impact estimates for ${_srcSymbolLC} --> ${_dstSymbolLC}:\n` +
+                        `${JSON.stringify(_pairData, null, 2)}\n` +
+                        error)
+            }
+          }
+        }
+
+      }
+
+      _costedRoute.push(_costedSegment)
+    }
+
+    _costedRolledRoutes.push(_costedRoute)
+  }
+
+  return _costedRolledRoutes
+}
+
+export const unrollCostedRolledRoutes = (costedRolledRoutes: any): any =>
+{
+  let routeNum = 0
+  let _unrolledRoutes:any = []
+  // log.debug(`Length costed rolled routes = ${costedRolledRoutes.length}`)
+  for (const _route of costedRolledRoutes) {
+
+    // Unroll each route by determining it's number of segments and then
+    // constructing each individual route implied by the pairs of each segment:
+    //
+    const _segmentPairCounts = []
+    for (let _segmentIndex = 0; _segmentIndex < _route.length; _segmentIndex++) {
+      _segmentPairCounts[_segmentIndex] = _route[_segmentIndex].pairs.length
+    }
+
+    const _segmentPairIndices =[]
+    for (let _index = 0; _index < _segmentPairCounts.length; _index++) {
+      _segmentPairIndices[_index] = 0
+    }
+
+    // This is basically a dynamically nested for loop, iterating over each pair
+    // ascribed to each route segment similar to a counter--when we are iterating
+    // the last route segment past it's counte, we know we've matched all pair ids.
+    // TODO: might be cleaner with an expanded multigraph or other solution.
+    //
+    // O(n^y), n=num pairs per segment, y = num segments
+    //
+    // log.debug(`Unrolling ...`)
+    while (_segmentPairIndices[_segmentPairIndices.length-1] <
+           _segmentPairCounts[_segmentPairCounts.length-1]) {
+      // log.debug(`Segment Pair Indices: ${_segmentPairIndices}`)
+      // log.debug(`Segment Pair Counts:  ${_segmentPairCounts}`)
+
+      routeNum++
+      const _routeObj:any = {
+        totalImpact: 0,
+        numSwaps: 0,
+        routeStr: '',
+        orderedSwaps: []
+      }
+
+      // log.debug(`Route ${routeNum}:\n` +
+      //           `----------------------------------------`)
+      for (let _segmentIndex = 0; _segmentIndex < _route.length; _segmentIndex++) {
+        const _segment = _route[_segmentIndex]
+        const _pairs = _segment.pairs
+        const _index = _segmentPairIndices[_segmentIndex]
+        const _pairData = _pairs[_index]
+        // log.debug(`${_segment.src} --> ${_segment.dst}, pair id: ${_pairData.id}, impact: ${_pairData.impact}`)
+
+        // TODO: big decimal or normalized big int here
+        const _totalImpact = _routeObj.totalImpact + parseFloat(_pairData.impact)
+        _routeObj.totalImpact += (_totalImpact < 100.0) ? _totalImpact : 100.0
+        _routeObj.numSwaps++
+        _routeObj.routeStr += (_segmentIndex === 0) ?
+            `${_segment.src} -> ${_segment.dst}` : ` -> ${_segment.dst}`
+        _routeObj.orderedSwaps.push({
+          src: _segment.src,
+          dst: _segment.dst,
+          id: _pairData.id,
+          impact: _pairData.impact
+        })
+      }
+
+      _unrolledRoutes.push(_routeObj)
+
+      // Increment the segment indices:
+      for (let _segmentIndex = 0; _segmentIndex < _route.length; _segmentIndex++) {
+        _segmentPairIndices[_segmentIndex]++
+        if (_segmentPairIndices[_segmentIndex] < _segmentPairCounts[_segmentIndex]) {
+          break
+        } else if (_segmentIndex === _route.length - 1) {
+          break
+        } else {
+          _segmentPairIndices[_segmentIndex] = 0
+        }
+      }
+    }
+  }
+
+  return _unrolledRoutes
 }

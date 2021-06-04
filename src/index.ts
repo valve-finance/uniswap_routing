@@ -105,16 +105,21 @@ const shell = async(): Promise<void> => {
           }
 
           log.info(`Calculating optimal routing for swap of: ${_amtPayToken} ${_payToken.toUpperCase()} -> ${_buyToken.toUpperCase()} ...`)
-          const _routes: any = await cmds.findRoutes(_uniData.pairGraph,
-                                                     _payToken,
-                                                     _buyToken,
-                                                     _settings["maxHops"].value)
+          const _rolledRoutes: any = await cmds.findRoutes(_uniData.pairGraph,
+                                                           _payToken,
+                                                           _buyToken,
+                                                           _settings["maxHops"].value)
 
-          // const _routeStr = cmds.routesToString(_routes)
+          // const _routeStr = cmds.routesToString(_rolledRoutes)
           // log.info(_routeStr)
 
-          const _routeCostStr = cmds.determineRouteCosts(_uniData.numPairData, _routes)
-          log.info(_routeCostStr)
+          // const _routeCostStr = cmds.printRouteCosts(_uniData.numPairData, _routes)
+          // log.info(_routeCostStr)
+          const _costedRolledRoutes = cmds.costRolledRoutes(_uniData.numPairData,
+                                                            _rolledRoutes)
+          
+          const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes)
+          log.debug(`Unrolled routes:\n${JSON.stringify(_unrolledRoutes, null, 2)}`)
         }
         break;
       
