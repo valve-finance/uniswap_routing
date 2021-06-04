@@ -558,7 +558,8 @@ export const costRolledRoutes = (numPairData: any,
   return _costedRolledRoutes
 }
 
-export const unrollCostedRolledRoutes = (costedRolledRoutes: any): any =>
+export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
+                                         maxImpact=10.0): any =>
 {
   let routeNum = 0
   let _unrolledRoutes:any = []
@@ -610,7 +611,7 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any): any =>
 
         // TODO: big decimal or normalized big int here
         const _totalImpact = _routeObj.totalImpact + parseFloat(_pairData.impact)
-        _routeObj.totalImpact += (_totalImpact < 100.0) ? _totalImpact : 100.0
+        _routeObj.totalImpact = (_totalImpact < 100.0) ? _totalImpact : 100.0
         _routeObj.numSwaps++
         _routeObj.routeStr += (_segmentIndex === 0) ?
             `${_segment.src} -> ${_segment.dst}` : ` -> ${_segment.dst}`
@@ -622,7 +623,9 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any): any =>
         })
       }
 
-      _unrolledRoutes.push(_routeObj)
+      if (_routeObj.totalImpact < maxImpact) {
+        _unrolledRoutes.push(_routeObj)
+      }
 
       // Increment the segment indices:
       for (let _segmentIndex = 0; _segmentIndex < _route.length; _segmentIndex++) {
@@ -638,5 +641,7 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any): any =>
     }
   }
 
-  return _unrolledRoutes
+  return _unrolledRoutes.sort((a:any, b:any) => {
+    return a.totalImpact - b.totalImpact    // Ascending order by total impact
+  })
 }
