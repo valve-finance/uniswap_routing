@@ -449,7 +449,18 @@ export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
  *        src:  <symbol>
  *        dst:  <symbol>
  *        pairs: [ 
- *          { id: <id>, impact: <% number> }, ...
+ *          { 
+ *            id: <id>, 
+ *            impact: <% number>,
+ *            token0: {
+ *              price: <BigDecimal>,    // price in token1,
+ *              symbol: '<UC symbol>'
+ *            },
+ *            token1: {
+ *              price: <BigDecimal>,    // price in token0,
+ *              symbol: '<UC symbol>'
+ *            }
+ *          }, ...
  *        ]
  *      },
  *      ...
@@ -536,7 +547,15 @@ export const costRolledRoutes = (numPairData: any,
               const impact = est.trade.priceImpact.toSignificant(3)
               _costedSegment.pairs.push({
                 id: _pairId,
-                impact
+                impact,
+                token0: {
+                  price: _pairData.token0Price,
+                  symbol: _pairData.token0.symbol
+                },
+                token1: {
+                  price: _pairData.token1Price,
+                  symbol: _pairData.token1.symbol
+                }
               })
               break
             } catch(error) {
@@ -619,7 +638,9 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
           src: _segment.src,
           dst: _segment.dst,
           id: _pairData.id,
-          impact: _pairData.impact
+          impact: _pairData.impact,
+          token0: _pairData.token0,
+          token1: _pairData.token1
         })
       }
 
