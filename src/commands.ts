@@ -550,11 +550,13 @@ export const costRolledRoutes = (numPairData: any,
                 impact,
                 token0: {
                   price: _pairData.token0Price,
-                  symbol: _pairData.token0.symbol
+                  symbol: _pairData.token0.symbol,
+                  name: _pairData.token0.name
                 },
                 token1: {
                   price: _pairData.token1Price,
-                  symbol: _pairData.token1.symbol
+                  symbol: _pairData.token1.symbol,
+                  name: _pairData.token1.name
                 }
               })
               break

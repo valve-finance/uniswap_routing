@@ -28,7 +28,7 @@ const initUniData = async(force=false): Promise<any> => {
   }
 }
 
-const main = async(): Promise<void> => {
+const test = async(): Promise<void> => {
   const _uniData:any = await initUniData()
 
   const _startMs = Date.now()
@@ -288,10 +288,10 @@ process.on('SIGINT', async():Promise<void> => {
 })
 
 program
-  .command('main', { isDefault: true })
-  .description('Starts an instance of the Uniswap optimizing router, fetching continous updates,' +
+  .command('test')
+  .description('Starts an test of the Uniswap optimizing router, fetching continous updates,' +
                ' of swap statistics, and serving Swap API requests.')
-  .action(main)
+  .action(test)
 
 program
   .command('shell')
@@ -309,7 +309,7 @@ program
   })
 
 program
-  .command('help')
+  .command('help', { isDefault: true })
   .action(() => {
     program.help()
   })
