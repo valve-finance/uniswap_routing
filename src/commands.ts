@@ -483,7 +483,7 @@ export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
  *    ]
  *  ]
  * 
- * The 'costedRoutes' datatype:
+ * The 'unrolledCostedRoutes' datatype:
  *  [                                 // Array of routes
  *    {                               // Route object
  *      totalImpact: <%age>,          // Sum of all route pair impacts
@@ -551,12 +551,14 @@ export const costRolledRoutes = (numPairData: any,
                 token0: {
                   price: _pairData.token0Price,
                   symbol: _pairData.token0.symbol,
-                  name: _pairData.token0.name
+                  name: _pairData.token0.name,
+                  id: _pairData.token0.id
                 },
                 token1: {
                   price: _pairData.token1Price,
                   symbol: _pairData.token1.symbol,
-                  name: _pairData.token1.name
+                  name: _pairData.token1.name,
+                  id: _pairData.token1.id
                 }
               })
               break
@@ -618,6 +620,16 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
         totalImpact: 0,
         numSwaps: 0,
         routeStr: '',
+        srcData: {
+          symbol: '',
+          name: '',
+          id: ''
+        },
+        dstData: {
+          symbol: '',
+          name: '',
+          id: ''
+        },
         orderedSwaps: []
       }
 
@@ -644,6 +656,29 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
           token0: _pairData.token0,
           token1: _pairData.token1
         })
+
+        if (_segmentIndex === 0) {
+          // Handle top-level source symbol information:
+          //
+          const tokenProp = (_segment.src === _pairData.token0.symbol.toLowerCase()) ?
+            'token0' : 'token1'
+          _routeObj.srcData = {
+            symbol: _pairData[tokenProp].symbol,
+            name: _pairData[tokenProp].name,
+            id: _pairData[tokenProp].id,
+          }
+        } 
+        if (_segmentIndex === (_route.length-1)) {
+          // Handle top-level destination symbol information:
+          //
+          const tokenProp = (_segment.dst === _pairData.token0.symbol.toLowerCase()) ?
+            'token0' : 'token1'
+          _routeObj.dstData = {
+            symbol: _pairData[tokenProp].symbol,
+            name: _pairData[tokenProp].name,
+            id: _pairData[tokenProp].id,
+          }
+        }
       }
 
       if (_routeObj.totalImpact < maxImpact) {
