@@ -70,7 +70,7 @@ export const getRawPairData = async(options?: any): Promise<any> => {
 }
 
 /**
- * getSymbolLookup:
+ * getSymbolAddrDict:
  *   Uniswap pairs have an id for the pair as well as an id for each token in the pair.
  *   Oddly, the id for the token in the pair is not unique for a given symbol.  For instance
  *   given the ficticious token symbol "ABBA", it may have the id "0x0...A" in one pair and
@@ -99,9 +99,9 @@ export const getRawPairData = async(options?: any): Promise<any> => {
  *          }
  * 
  */
-export const getSymbolLookup = (allPairsRaw: any): any =>
+export const getSymbolAddrDict = (allPairsRaw: any): any =>
 {
-  const _symbolLookup: any = {}
+  const _symbolAddrDict: any = {}
 
   for (const _rawPair of allPairsRaw.pairs) {
     const lcPairId = _rawPair.id.toLowerCase
@@ -111,15 +111,15 @@ export const getSymbolLookup = (allPairsRaw: any): any =>
       const lcSymbol = token.symbol.toLowerCase()
       const lcSymbolId = token.id.toLowerCase()
 
-      if (!_symbolLookup.hasOwnProperty(lcSymbol)) {
-        _symbolLookup[lcSymbol] = {
+      if (!_symbolAddrDict.hasOwnProperty(lcSymbol)) {
+        _symbolAddrDict[lcSymbol] = {
           [lcSymbolId]: [ lcPairId ]
         }
       } else {
-        if (!_symbolLookup[lcSymbol].hasOwnProperty(lcSymbolId)) {
-          _symbolLookup[lcSymbol][lcSymbolId] = [ lcPairId ]
+        if (!_symbolAddrDict[lcSymbol].hasOwnProperty(lcSymbolId)) {
+          _symbolAddrDict[lcSymbol][lcSymbolId] = [ lcPairId ]
         } else {
-          _symbolLookup[lcSymbol][lcSymbolId].push(lcPairId)
+          _symbolAddrDict[lcSymbol][lcSymbolId].push(lcPairId)
         }
       }
     }
@@ -127,7 +127,7 @@ export const getSymbolLookup = (allPairsRaw: any): any =>
 
   // Present statistics:
   //
-  const numSymbols = Object.keys(_symbolLookup).length
+  const numSymbols = Object.keys(_symbolAddrDict).length
 
   let maxIdsPerSymbol = 0
   let mostIdSymbol = ''
@@ -136,15 +136,27 @@ export const getSymbolLookup = (allPairsRaw: any): any =>
   let mostPairIdSymbolId = ''
   let mostPairIdSymbol = ''
 
-  for (const symbol in _symbolLookup) {
-    const idsPerSymbol = Object.keys(_symbolLookup[symbol]).length
-    if (idsPerSymbol > maxIdsPerSymbol) {
-      maxIdsPerSymbol = idsPerSymbol
-      mostIdSymbol = symbol
-    }
+  const _symbolIdsArr: any = []
 
-    for (const symbolId in _symbolLookup[symbol]) {
-      const pairIdsPerSymbolId = _symbolLookup[symbol][symbolId].length
+  for (const symbol in _symbolAddrDict) {
+    _symbolIdsArr.push({
+      symbol,
+      ids: Object.keys(_symbolAddrDict[symbol])
+    })
+  }
+  _symbolIdsArr.sort((a:any, b: any) => {
+    return b.ids.length - a.ids.length  // Descending order by number of ids / symbol
+  })
+  let NUM_OVL_SYM = 10
+  let topOverloadedSymbols = ''
+  for (let idx = 0; idx < NUM_OVL_SYM; idx++) {
+    const symbolData = _symbolIdsArr[idx]
+    topOverloadedSymbols += `\t${symbolData.ids.length}\t\t${symbolData.symbol}\n`
+  }
+
+  for (const symbol in _symbolAddrDict) {
+    for (const symbolId in _symbolAddrDict[symbol]) {
+      const pairIdsPerSymbolId = _symbolAddrDict[symbol][symbolId].length
       if (pairIdsPerSymbolId > mostPairIdsPerSymbolId) {
         mostPairIdsPerSymbolId = pairIdsPerSymbolId
         mostPairIdSymbolId = symbolId
@@ -156,11 +168,52 @@ export const getSymbolLookup = (allPairsRaw: any): any =>
   log.debug(`Symbol Lookup Stats\n` +
             `----------------------------------------\n` +
             `symbols                  = ${numSymbols}\n` +
-            `max(id per symbol)       = ${maxIdsPerSymbol}   (${mostIdSymbol})\n` +
-            `max(pairid per symbolid) = ${mostPairIdsPerSymbolId}   (${mostPairIdSymbol}, ${mostPairIdSymbolId})\n\n`)
+            `max(pairid per symbolid) = ${mostPairIdsPerSymbolId}   (${mostPairIdSymbol}, ${mostPairIdSymbolId})\n` +
+            `top ${NUM_OVL_SYM} most ids per symbol):\n` +
+            topOverloadedSymbols + `\n`)
 
-  return _symbolLookup
+  return _symbolAddrDict
 }
+
+/**
+ * getAddrSymbolLookup:
+ *   Uniswap pairs have an id for the pair as well as an id for each token in the pair.
+ *   Oddly, the id for the token in the pair is not unique for a given symbol.  For instance
+ *   given the ficticious token symbol "ABBA", it may have the id "0x0...A" in one pair and
+ *   the id "0x0...F" in another pair.
+ * 
+ *   This method builds a system for looking up the following information:
+ *      - The symbol for a given token id.
+ *      - All pair ids for a given token id.
+ * 
+ * @param allPairsRaw 
+ * @returns A structure allowing all token ids their corresponding pair ids for a given
+ *          symbol to be examined (note all values lowercased):
+ * 
+ *          {
+ *            <symbol id>: <symbol>,
+ *            <symbol id>: <symbol>,
+ *            ...
+ *          }
+ * 
+ */
+export const getAddrSymbolDict = (allPairsRaw: any): any =>
+{
+  const _addrSymbolDict: any = {}
+
+  for (const _rawPair of allPairsRaw.pairs) {
+    const lcPairId = _rawPair.id.toLowerCase
+
+    const { token0, token1 } = _rawPair
+    for (const token of [token0, token1]) {
+      const lcSymbolId = token.id.toLowerCase()
+      _addrSymbolDict[lcSymbolId] = token.symbol
+    }
+  }
+
+  return _addrSymbolDict
+}
+
 
 export const constructPairGraph = async(allPairsNumeric: any): Promise<any> =>
 {
@@ -172,26 +225,46 @@ export const constructPairGraph = async(allPairsNumeric: any): Promise<any> =>
   let maxEdgePair = ''
   for (const pair of allPairsNumeric.pairs) {
     const pairId = pair.id.toLowerCase()
-    const symbol0 = pair.token0.symbol.toLowerCase()
-    const symbol1 = pair.token1.symbol.toLowerCase()
+    const { token0 } = pair
+    const { token1 } = pair
+    const idToken0 = token0.id.toLowerCase()
+    const idToken1 = token1.id.toLowerCase()
+    // const symbol0 = pair.token0.symbol.toLowerCase()
+    // const symbol1 = pair.token1.symbol.toLowerCase()
 
-    let edges = _g.edge(symbol0, symbol1)
+    let edges = _g.edge(idToken0, idToken1)
+
+    // Duplicate edges were only happening when graph vertices are symbols. There
+    // are no duplicate pairs connecting by token IDs:
     if (edges) {
+      log.warn(`Existing Edge Found:\n` +
+               `${idToken0} (${token0.symbol}) <---> ${idToken1} (${token1.symbol})`)
+
       edges = {
         pairIds: [...edges.pairIds, pairId]
       }
 
       if (edges.pairIds.length > maxEdges) {
         maxEdges = edges.pairIds.length
-        maxEdgePair = `${symbol0} <---> ${symbol1}`
+        maxEdgePair = `${idToken0} (${token0.symbol}) <---> ${idToken1} (${token1.symbol})`
       }
     } else {
       edges = {
         pairIds: [pairId]
       }
     }
-    _g.setEdge(symbol0, symbol1, edges)  // <-- pairID set for label and edge
-                                          // !!! Needed for multigraph
+    _g.setEdge(idToken0, idToken1, edges)  // <-- pairID set for label and edge
+                                           // !!! Needed for multigraph
+
+    // TODO:
+    //    - look at adding lowercased symbols as label on nodes
+    //        - from https://github.com/dagrejs/graphlib/wiki
+    //          g.setNode("c", { k: 123 });
+    //          const label = g.node("c")
+    //
+    // let label0 = _g.node(idToken0)
+    // if (label0) 
+    // let label1 = _g.node(idToken1)
   }
 
   const edges = _g.edges()
@@ -215,23 +288,23 @@ const _routeSearch = (g: any,
                       maxHops: number, 
                       route: any, 
                       rolledRoutes: any, 
-                      originSymbol: string, 
-                      destSymbol: string): void => 
+                      originAddr: string, 
+                      destAddr: string): void => 
 {
   if (hops < maxHops) {
-    let neighbors = g.neighbors(originSymbol)
+    let neighbors = g.neighbors(originAddr)
     hops++
 
     for (const neighbor of neighbors) {
       // Optimization: rather than make this a mulitgraph, represent all pairs in a single edge and
       //               store their ids as a property of that edge.
-      const _route: any = [...route, { src: originSymbol, dst: neighbor, pairIds: g.edge(originSymbol, neighbor).pairIds }]
-      if (neighbor === destSymbol) {
+      const _route: any = [...route, { src: originAddr, dst: neighbor, pairIds: g.edge(originAddr, neighbor).pairIds }]
+      if (neighbor === destAddr) {
         rolledRoutes.push(_route)
       }
 
-      if (originSymbol !== neighbor) {
-        _routeSearch(g, hops, maxHops, _route, rolledRoutes, neighbor, destSymbol)
+      if (originAddr !== neighbor) {
+        _routeSearch(g, hops, maxHops, _route, rolledRoutes, neighbor, destAddr)
       }
     }
   }
@@ -243,45 +316,45 @@ const _routeSearch = (g: any,
 *                 to maxHops.  Results are stored in routes.
 *
 */
-const routeSearch = (g: any, originSymbol: string, destSymbol: string, maxHops: number) => 
+const routeSearch = (g: any, originAddr: string, destAddr: string, maxHops: number) => 
 {
   let hops = 0
   let route: any = []
   let rolledRoutes: any = []
 
-  _routeSearch(g, hops, maxHops, route, rolledRoutes, originSymbol, destSymbol)
+  _routeSearch(g, hops, maxHops, route, rolledRoutes, originAddr, destAddr)
 
   return rolledRoutes
 }
 
 export const findRoutes = async(pairGraph: any,
-                                tokenSymbolSrc: string,
-                                tokenSymbolDst: string,
+                                srcAddr: string,
+                                dstAddr: string,
                                 maxDistance=2): Promise<any> =>
 {
-  if (!tokenSymbolSrc || !tokenSymbolDst) {
-    log.error(`A source token symbol(${tokenSymbolSrc}) and destination token ` +
-              `symbol(${tokenSymbolDst}) are required.`)
+  if (!srcAddr || !dstAddr) {
+    log.error(`A source token address(${srcAddr}) and destination token ` +
+              `address(${dstAddr}) are required.`)
     return
   }
-  const _tokenSymbolSrc = tokenSymbolSrc.toLowerCase()
-  const _tokenSymbolDst = tokenSymbolDst.toLowerCase()
+  const _srcAddrLC = srcAddr.toLowerCase()
+  const _dstAddrLC = dstAddr.toLowerCase()
 
-  if (_tokenSymbolSrc === _tokenSymbolDst) {
-    log.error(`Money laundering not supported (same token routes, ${tokenSymbolSrc} -> ${tokenSymbolDst}).`)
+  if (_srcAddrLC === _dstAddrLC) {
+    log.error(`Money laundering not supported (same token routes, ${srcAddr} -> ${dstAddr}).`)
   }
 
-  if (!pairGraph.hasNode(_tokenSymbolSrc)) {
-    log.error(`Source token symbol, ${tokenSymbolSrc}, is not in the graph.`)
+  if (!pairGraph.hasNode(_srcAddrLC)) {
+    log.error(`Source token address, ${srcAddr}, is not in the graph.`)
     return
   }
-  if (!pairGraph.hasNode(_tokenSymbolDst)) {
-    log.error(`Destination token symbol, ${tokenSymbolDst}, is not in the graph.`)
+  if (!pairGraph.hasNode(_dstAddrLC)) {
+    log.error(`Destination token address, ${dstAddr}, is not in the graph.`)
     return
   }
 
-  log.info(`Finding routes from token ${tokenSymbolSrc} to token ${tokenSymbolDst} ...`)
-  const rolledRoutes = routeSearch(pairGraph, _tokenSymbolSrc, _tokenSymbolDst, maxDistance)
+  log.info(`Finding routes from token ${srcAddr} to token ${dstAddr} ...`)
+  const rolledRoutes = routeSearch(pairGraph, _srcAddrLC, _dstAddrLC, maxDistance)
   rolledRoutes.sort((a: any, b:any) => {
     return a.length - b.length    // Ascending order by route length
   })
@@ -289,7 +362,7 @@ export const findRoutes = async(pairGraph: any,
   return rolledRoutes
 }
 
-export const routesToString = (rolledRoutes: any): string => 
+export const routesToString = (rolledRoutes: any, addrSymbolLookup: any = undefined): string => 
 {
   let _routeStr: string = '\n'
 
@@ -298,7 +371,16 @@ export const routesToString = (rolledRoutes: any): string =>
     _routeStr += `Route ${++_routeNum}:\n` +
                 `----------------------------------------\n`
     for (const _pair of _route) {
-      _routeStr += `  ${_pair.src} --> ${_pair.dst}, ${_pair.pairIds.length} pairs:\n`
+      let srcStr = _pair.src
+      let dstStr = _pair.dst
+      if (addrSymbolLookup) {
+        const srcSym = addrSymbolLookup[_pair.src]
+        const dstSym = addrSymbolLookup[_pair.dst]
+        srcStr += (srcSym) ? ` (${srcSym})` : ''
+        dstStr += (dstSym) ? ` (${dstSym})` : ''
+      }
+
+      _routeStr += `  ${srcStr} --> ${dstStr}, ${_pair.pairIds.length} pairs:\n`
       for (const _pairId of _pair.pairIds) {
         _routeStr += `      ${_pairId}\n`
       }
@@ -309,7 +391,7 @@ export const routesToString = (rolledRoutes: any): string =>
   return _routeStr
 }
 
-const computeTradeEstimates = (pairData:any, srcSymbolLC:string, dstSymbolLC:string ): any => 
+const computeTradeEstimates = (pairData:any, srcAddrLC:string, dstAddrLC:string ): any => 
 {
   // 0. Future TODO: determine if the pair is invalid b/c the tokens are 
   //    bad/stale/old.
@@ -353,7 +435,7 @@ const computeTradeEstimates = (pairData:any, srcSymbolLC:string, dstSymbolLC:str
 
   // 5. Construct the route & trade objects to determine the price impact.
   //
-  const _srcToken = (srcSymbolLC === pairData.token0.symbol.toLowerCase()) ?
+  const _srcToken = (srcAddrLC === pairData.token0.id.toLowerCase()) ?
       { obj: _token0, decimals: _token0Decimals } :
       { obj: _token1, decimals: _token1Decimals }
 
@@ -381,15 +463,15 @@ export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
     const _measuredRoute:any = []
 
     for (const _pair of _route) {
-      const _srcSymbolLC = _pair.src
-      const _dstSymbolLC = _pair.dst
-      _routeCostStr += `${_srcSymbolLC} --> ${_dstSymbolLC}:\n`
+      const _srcAddr = _pair.src
+      const _dstAddr = _pair.dst
+      _routeCostStr += `${_srcAddr} --> ${_dstAddr}:\n`
 
       for (const _pairId of _pair.pairIds) {
         for (const _pairData of numPairData.pairs) {
           if (_pairData.id === _pairId) {
             try {
-              const est = computeTradeEstimates(_pairData, _srcSymbolLC, _dstSymbolLC)
+              const est = computeTradeEstimates(_pairData, _srcAddr, _dstAddr)
 
               _routeCostStr += `     pair (${_pairId}):  ${est.trade.priceImpact.toSignificant(3)}\n`
               // _routeCostStr += `      Pair ${_pairId}:\n` +
@@ -412,7 +494,7 @@ export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
               //                  `        impact:    ${est.trade.priceImpact.toSignificant(3)}\n`
               break
             } catch(error) {
-              log.error(`Failed computing trade estimates for ${_srcSymbolLC} --> ${_dstSymbolLC}:\n` +
+              log.error(`Failed computing trade estimates for ${_srcAddr} --> ${_dstAddr}:\n` +
                         `${JSON.stringify(_pairData, null, 2)}\n` +
                         error)
             }
@@ -426,15 +508,15 @@ export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
 }
 
 /*
- * DATATYPES FOR ROUTES
+ * DATATYPES FOR ROUTES 
  *
  * The 'rolledRoutes' datatype:
  *
  *  [                 // Array of routes
  *    [               // Ordered array of pairs to complete the route (A -> B -> C)
  *      {
- *        src:  <symbol>
- *        dst:  <symbol>
+ *        src:  <address>
+ *        dst:  <address>
  *        pairIds: [<pairId>, ...]
  *      },
  *      ...
@@ -446,19 +528,23 @@ export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
  *  [                 // Array of routes
  *    [               // Ordered array of pairs to complete the route (A -> B -> C)
  *      {
- *        src:  <symbol>
- *        dst:  <symbol>
+ *        src:  <token LC address>
+ *        dst:  <token LC address>
  *        pairs: [ 
  *          { 
  *            id: <id>, 
  *            impact: <% number>,
  *            token0: {
  *              price: <BigDecimal>,    // price in token1,
- *              symbol: '<UC symbol>'
+ *              symbol: '<UC symbol>',
+ *              name: '<token name>',
+ *              id: <token LC address>
  *            },
  *            token1: {
  *              price: <BigDecimal>,    // price in token0,
  *              symbol: '<UC symbol>'
+ *              name: '<token name>',
+ *              id: <token LC address>
  *            }
  *          }, ...
  *        ]
@@ -475,8 +561,8 @@ export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
  *  [                 // Array of routes
  *    [               // Ordered array of pairs to complete the route (A -> B -> C)
  *      {
- *        src:  <symbol>
- *        dst:  <symbol>
+ *        src:  <address>
+ *        dst:  <address>
  *        pairId: <pairId>
  *      },
  *      ...
@@ -535,15 +621,15 @@ export const costRolledRoutes = (numPairData: any,
         dst: _pair.dst,
         pairs: []
       }
-      const _srcSymbolLC = _pair.src.toLowerCase()
-      const _dstSymbolLC = _pair.src.toLowerCase()
+      const _srcAddr = _pair.src.toLowerCase()
+      const _dstAddr = _pair.src.toLowerCase()
 
       for (const _pairId of _pair.pairIds) {
 
         for (const _pairData of numPairData.pairs) {
           if (_pairData.id === _pairId) {
             try {
-              const est = computeTradeEstimates(_pairData, _srcSymbolLC, _dstSymbolLC)
+              const est = computeTradeEstimates(_pairData, _srcAddr, _dstAddr)
               const impact = est.trade.priceImpact.toSignificant(3)
               _costedSegment.pairs.push({
                 id: _pairId,
@@ -563,7 +649,7 @@ export const costRolledRoutes = (numPairData: any,
               })
               break
             } catch(error) {
-              log.error(`Failed computing impact estimates for ${_srcSymbolLC} --> ${_dstSymbolLC}:\n` +
+              log.error(`Failed computing impact estimates for ${_srcAddr} --> ${_dstAddr}:\n` +
                         `${JSON.stringify(_pairData, null, 2)}\n` +
                         error)
             }
@@ -660,7 +746,7 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
         if (_segmentIndex === 0) {
           // Handle top-level source symbol information:
           //
-          const tokenProp = (_segment.src === _pairData.token0.symbol.toLowerCase()) ?
+          const tokenProp = (_segment.src === _pairData.token0.id.toLowerCase()) ?
             'token0' : 'token1'
           _routeObj.srcData = {
             symbol: _pairData[tokenProp].symbol,
@@ -671,7 +757,7 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
         if (_segmentIndex === (_route.length-1)) {
           // Handle top-level destination symbol information:
           //
-          const tokenProp = (_segment.dst === _pairData.token0.symbol.toLowerCase()) ?
+          const tokenProp = (_segment.dst === _pairData.token0.id.toLowerCase()) ?
             'token0' : 'token1'
           _routeObj.dstData = {
             symbol: _pairData[tokenProp].symbol,

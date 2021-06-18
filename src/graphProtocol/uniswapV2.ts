@@ -38,11 +38,11 @@ const log = ds.getLog('uniswapV2')
  *   skip values.
  * 
  *   Occassionally the graph just fails on a query so there is also retry if the response is
- *   missing the data field.  The default is 3 for missingDataRetries.
+ *   missing the data field.  The default is 5 for missingDataRetries.
  */
 export const getRawPairsV2 = async(fetchAmt: number, 
                                 lastId: string, 
-                                missingDataRetries=3): Promise<any> => 
+                                missingDataRetries=5): Promise<any> => 
 {
   // TODO: Look into Apollo client for graphql (see uniswap info) for this.
   //       grqphql-tag node lib for queries

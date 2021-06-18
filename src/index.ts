@@ -18,24 +18,31 @@ const initUniData = async(force=false): Promise<any> => {
   log.info('Initializing Uniswap data. Please wait (~ 1 min.) ...')
 
   const _rawPairData: any = await cmds.getRawPairData({ignorePersisted: force})
-  const _symbolLookup: any = cmds. getSymbolLookup(_rawPairData)
+  const _symbolAddrDict: any = cmds.getSymbolAddrDict(_rawPairData)
+  const _addrSymbolDict: any = cmds.getAddrSymbolDict(_rawPairData)
   const _pairGraph: any = await cmds.constructPairGraph(_rawPairData)
 
   return {
     pairGraph: _pairGraph,
     numPairData: _rawPairData,
-    symbolLookup: _symbolLookup
+    symbolAddrDict: _symbolAddrDict,
+    addrSymbolDict: _addrSymbolDict
   }
 }
 
 const test = async(): Promise<void> => {
   const _uniData:any = await initUniData()
 
+  // From: https://github.com/Uniswap/uniswap-interface/blob/03913d9c0b5124b95cff34bf2e80330b7fd8bcc1/src/constants/index.ts
+  //
+  const addrDAI = '0x6B175474E89094C44Da98b954EedeAC495271d0F'
+  const addrCOMP = '0xc00e94Cb662C3520282E6f5717214004A7f26888'
+  //
   const _startMs = Date.now()
-  const _routes: any = await cmds.findRoutes(_uniData.pairGraph, 'mcb', 'dyp')
+  const _routes: any = await cmds.findRoutes(_uniData.pairGraph, addrDAI, addrCOMP)
   log.info(`Computed in ${(Date.now()-_startMs)} ms.`)
 
-  const _routeStr = cmds.routesToString(_routes)
+  const _routeStr = cmds.routesToString(_routes, _uniData.addrSymbolDict)
   log.info(_routeStr)
  
   process.exit(0)
@@ -77,11 +84,14 @@ const shell = async(): Promise<void> => {
         {
           let validEntry = false
           let _payToken = ''
+          let _payTokenSymbol = ''
           while (!validEntry) {
-            const payToken = await _promptUser('Swap: what token would you like to pay with?')
+            const payToken = await _promptUser('Swap: what token would you like to pay with (enter a token ID)?')
             _payToken = payToken.toLowerCase().trim()
-            if (_uniData.symbolLookup.hasOwnProperty(_payToken)) {
+            _payTokenSymbol = _uniData.addrSymbolDict[_payToken]
+            if (_payTokenSymbol) {
               validEntry = true
+              log.info(`Paying with ${_payTokenSymbol} (${_payToken})`)
             } else {
               log.info(`Invalid token specified: ${payToken}. Try again.`)
             }
@@ -90,22 +100,25 @@ const shell = async(): Promise<void> => {
           validEntry = false
           let _amtPayToken = 0.0
           while (!validEntry) {
-            const amtPayToken = await _promptUser(`Swap: how much ${_payToken} would you like to spend (e.g. 1.28)?`)
+            const amtPayToken = await _promptUser(`Swap: how much ${_payTokenSymbol} (${_payToken}) would you like to spend (e.g. 1.28)?`)
             try {
               _amtPayToken = parseFloat(amtPayToken)
               validEntry = true
             } catch (conversionError) {
-              log.info(`Invalid amount of ${_payToken} specified: ${amtPayToken}. (Must be a number, greater than zero. No units or non-numeric characters.)`)
+              log.info(`Invalid amount of ${_payTokenSymbol} (${_payToken}) specified: ${amtPayToken}. (Must be a number, greater than zero. No units or non-numeric characters.)`)
             }
           }
 
           validEntry = false
           let _buyToken = ''
+          let _buyTokenSymbol = ''
           while (!validEntry) {
-            const buyToken = await _promptUser('Swap: what token would you like to buy?')
+            const buyToken = await _promptUser('Swap: what token would you like to buy (enter a token ID)?')
             _buyToken = buyToken.toLowerCase().trim()
-            if (_uniData.symbolLookup.hasOwnProperty(_buyToken)) {
+            const _buyTokenSymbol = _uniData.addrSymbolDict[_buyToken]
+            if (_buyTokenSymbol) {
               validEntry = true
+              log.info(`Buying ${_buyTokenSymbol} (${_buyToken})`)
             } else {
               log.info(`Invalid token specified: ${buyToken}. Try again.`)
             }
