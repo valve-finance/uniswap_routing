@@ -106,6 +106,16 @@ const test = async(): Promise<void> => {
   process.exit(0)
 }
 
+const _padStr = (aString: string, aDesiredWidth=25): string => {
+  const aStringLen = aString.length
+  const numSpacesNeeded = aDesiredWidth - aStringLen
+  let retString = aString
+  for (let idx = 0; idx < numSpacesNeeded; idx++) {
+    retString += ' '
+  }
+  return retString
+}
+
 const nonHubRoutes = async(minLiquidityUSD=10000, maxRoutes=100): Promise<void> => {
   const _uniData:any = await initUniData()
   
@@ -204,10 +214,10 @@ const nonHubRoutes = async(minLiquidityUSD=10000, maxRoutes=100): Promise<void> 
         routeAttemptCount++
 
         if (_routes.length) {
-          log.info(`(${durationMS} ms): Found routes from ${srcTokenIdLC} to ${dstTokenIdLC}.`)
+          // log.debug(`(${durationMS} ms): Found routes from ${srcTokenIdLC} to ${dstTokenIdLC}.`)
           routeResults[resultKey] = _routes
-        } else {
-          log.info(`(${durationMS} ms): No routes from ${srcTokenIdLC} to ${dstTokenIdLC}.`)
+          // } else {
+          //   log.debug(`(${durationMS} ms): No routes from ${srcTokenIdLC} to ${dstTokenIdLC}.`)
         }
       }
     }
@@ -217,6 +227,57 @@ const nonHubRoutes = async(minLiquidityUSD=10000, maxRoutes=100): Promise<void> 
 
   // 5. Report on the top <Y> routes based on liquidity
   //      - Sort by the highest minimum liquidity of the route
+  const routeReport = []
+  for (const routesKey in routeResults) {
+    const routesData = routeResults[routesKey]
+
+    // routesKey to symbols:
+    const routesKeyEle = routesKey.split('-')
+    const symbolKey = `${_uniData.addrSymbolDict[routesKeyEle[0]]} --> ${_uniData.addrSymbolDict[routesKeyEle[1]]}`
+
+    let routeIndex = 0
+    let maxRouteLiquidity = 0
+    for (const routeData of routesData) {
+      routeIndex++
+
+      // Determine the maximum liquidity through the entire trade (i.e. if one segment has lower
+      // liquidity than another, then it is the maximum liquidity possible for a single path trade):
+      //
+      let maxSegmentLiquidity = -1
+      for (const segment of routeData) {
+        let maxPairLiquidity = 0
+        for (const pairId of segment.pairIds) {
+          // TODO: fix numPairData (this is slow AF--O(n) worst case vs. log(n))
+          for (const pairData of _uniData.numPairData.pairs) {
+            if (pairData.id.toLowerCase() === pairId) {
+              const reserveUSDFloat = parseFloat(pairData.reserveUSD)   // TODO: bignum or bigdec
+              if (reserveUSDFloat > maxPairLiquidity) {
+                maxPairLiquidity = reserveUSDFloat
+              }
+            }
+          }
+        }
+        if (maxSegmentLiquidity === -1 || maxSegmentLiquidity > maxPairLiquidity) {
+          maxSegmentLiquidity = maxPairLiquidity
+        }
+      }
+
+      routeData['maxSegmentLiquidity'] = maxSegmentLiquidity
+      //log.info(`${symbolKey} #${routeIndex}: $${maxSegmentLiquidity} USD`)
+      if (maxSegmentLiquidity > maxRouteLiquidity) {
+        maxRouteLiquidity = maxSegmentLiquidity
+      }
+    }
+    routeReport.push({
+      symbolKey,
+      maxRouteLiquidity
+    })
+  }
+  routeReport.sort((a: any, b:any) => {return b.maxRouteLiquidity - a.maxRouteLiquidity})  // Desc. order
+  for (let index = 0; index < maxRoutes; index++) {
+    let leftStr =_padStr(`${index+1}. ` + routeReport[index].symbolKey + ' :') 
+    log.info(`${leftStr}\t${routeReport[index].maxRouteLiquidity.toFixed(2)} USD route liquidity`)
+  }
 }
 
 const _promptUser = async (query: string):Promise<string> => 
@@ -477,10 +538,11 @@ program
   .action(test)
 
 const MIN_LIQUIDITY = 100000
+const MAX_ROUTES = 100
 program
-  .command('reportNonHub [minLiquidity]')
-  .description('Reports on routes found between non-hub tokens in pools of a certain liquidity ($10k).')
-  .action(async (minLiquidity) => {
+  .command('reportNonHub [minLiquidity] [maxRoutes]')
+  .description('Reports on routes found between non-hub tokens in pools of minLiquidity (default 10000000USD). Limits to maxRoutes (default 100).')
+  .action(async (minLiquidity, maxRoutes) => {
     try {
       if (minLiquidity) {
         minLiquidity = parseFloat(minLiquidity)
@@ -491,7 +553,17 @@ program
       minLiquidity = MIN_LIQUIDITY
     }
 
-    await nonHubRoutes(minLiquidity)
+    try {
+      if (maxRoutes) {
+        maxRoutes = parseInt(maxRoutes)
+      } else {
+        maxRoutes = MAX_ROUTES 
+      }
+    } catch (ignoredErr) {
+      maxRoutes =  MAX_ROUTES
+    }
+
+    await nonHubRoutes(minLiquidity, maxRoutes)
   })
 
 program

@@ -380,7 +380,8 @@ const routeSearch = (g: any, originAddr: string, destAddr: string, constraints: 
 export const findRoutes = async(pairGraph: any,
                                 srcAddr: string,
                                 dstAddr: string,
-                                constraints?: any): Promise<any> =>
+                                constraints?: any,
+                                verbose?: boolean): Promise<any> =>
 {
   const _defaultConstrs = {
     maxDistance: 2,
@@ -423,7 +424,9 @@ export const findRoutes = async(pairGraph: any,
     return
   }
 
-  log.info(`Finding routes from token ${srcAddr} to token ${dstAddr} ...`)
+  if (verbose) {
+    log.info(`Finding routes from token ${srcAddr} to token ${dstAddr} ...`)
+  }
   const rolledRoutes = routeSearch(pairGraph, _srcAddrLC, _dstAddrLC, _constraints)
   rolledRoutes.sort((a: any, b:any) => {
     return a.length - b.length    // Ascending order by route length
