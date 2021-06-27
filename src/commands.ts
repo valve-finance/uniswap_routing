@@ -20,6 +20,7 @@ const graphlib = require('@dagrejs/graphlib')
 
 const log = ds.getLog('commands')
 const ALL_PAIRS_FILE = 'all_pairs_v2.json'
+const ALL_TOKENS_FILE = 'all_tokens.json'
 const MAX_DATA_AGE = Duration.fromObject({ days: 5 })
 
 /**
@@ -67,6 +68,45 @@ export const getRawPairData = async(options?: any): Promise<any> => {
   }
 
   return _allPairs
+}
+
+export const getTokenData = async(options?: any): Promise<any> => {
+  const _defaultOpts = {
+    ignorePersisted: false,
+    persist: true
+  }
+  const _options = {..._defaultOpts, ...options}
+
+  let _storedObj: any = undefined
+  try {
+    if (!_options.ignorePersisted) {
+      _storedObj =  await p.retrieveObject(ALL_TOKENS_FILE)
+    }
+  } catch(ignoredError) {
+    log.warn(`Unable to retrieve stored token data. Fetching from Graph Protocol.`)
+  }
+
+  let _allTokens: any = undefined
+  if (_storedObj && _storedObj.hasOwnProperty('object')) {
+    _allTokens = _storedObj.object
+  }
+
+  let _storedAgeLimitExceeded = false
+  if (_storedObj && _storedObj.hasOwnProperty('timeMs')) {
+    const _storedInterval = Interval.fromDateTimes(DateTime.fromMillis(_storedObj.timeMs),
+                                                   DateTime.now())
+    _storedAgeLimitExceeded = _storedInterval.length() > MAX_DATA_AGE.toMillis()
+  }
+
+  if (!_allTokens || _storedAgeLimitExceeded) {
+    _allTokens = await uniGraphV2.fetchAllTokensV2()
+
+    if (_options.persist) {
+      await p.storeObject(ALL_TOKENS_FILE, _allTokens)
+    }
+  }
+
+  return _allTokens
 }
 
 /**
@@ -221,7 +261,7 @@ export const constructPairGraph = async(allPairsNumeric: any): Promise<any> =>
                                  multigraph: false,   // Explain optimization here (attach array of pair ids for traversal speed)
                                  compound: false})
   
-  let maxEdges = 0
+  let maxEdges = 1
   let maxEdgePair = ''
   for (const pair of allPairsNumeric.pairs) {
     const pairId = pair.id.toLowerCase()
@@ -285,26 +325,34 @@ export const constructPairGraph = async(allPairsNumeric: any): Promise<any> =>
 
 const _routeSearch = (g: any, 
                       hops: number, 
-                      maxHops: number, 
+                      constraints: any,
                       route: any, 
                       rolledRoutes: any, 
                       originAddr: string, 
                       destAddr: string): void => 
 {
-  if (hops < maxHops) {
+  if (hops < constraints.maxDistance) {
     let neighbors = g.neighbors(originAddr)
     hops++
 
     for (const neighbor of neighbors) {
+      if (constraints.ignoreTokenIds.includes(neighbor)) {
+        continue
+      }
+
+      // TODO: filter the pairIds of the edge with the constraints.ignorePairIds and then continue
+      //       constructing the route.
+
       // Optimization: rather than make this a mulitgraph, represent all pairs in a single edge and
       //               store their ids as a property of that edge.
       const _route: any = [...route, { src: originAddr, dst: neighbor, pairIds: g.edge(originAddr, neighbor).pairIds }]
       if (neighbor === destAddr) {
         rolledRoutes.push(_route)
+        continue
       }
 
       if (originAddr !== neighbor) {
-        _routeSearch(g, hops, maxHops, _route, rolledRoutes, neighbor, destAddr)
+        _routeSearch(g, hops, constraints, _route, rolledRoutes, neighbor, destAddr)
       }
     }
   }
@@ -316,13 +364,15 @@ const _routeSearch = (g: any,
 *                 to maxHops.  Results are stored in routes.
 *
 */
-const routeSearch = (g: any, originAddr: string, destAddr: string, maxHops: number) => 
+const routeSearch = (g: any, originAddr: string, destAddr: string, constraints: any) => 
 {
+  // TODO: sanitize constraints (i.e. make sure maxDistance and empty arrs are defined)
+
   let hops = 0
   let route: any = []
   let rolledRoutes: any = []
 
-  _routeSearch(g, hops, maxHops, route, rolledRoutes, originAddr, destAddr)
+  _routeSearch(g, hops, constraints, route, rolledRoutes, originAddr, destAddr)
 
   return rolledRoutes
 }
@@ -330,8 +380,19 @@ const routeSearch = (g: any, originAddr: string, destAddr: string, maxHops: numb
 export const findRoutes = async(pairGraph: any,
                                 srcAddr: string,
                                 dstAddr: string,
-                                maxDistance=2): Promise<any> =>
+                                constraints?: any): Promise<any> =>
 {
+  const _defaultConstrs = {
+    maxDistance: 2,
+    ignoreTokenIds: [],
+    ignorePairIds: []
+  }
+  const _constraints = {..._defaultConstrs, ...constraints}
+  // Lower case constraint IDs
+  //   TODO: check types and existence of arrs etc. (sanitize)
+  _constraints.ignoreTokenIds = _constraints.ignoreTokenIds.map((id:string) => {return id.toLowerCase()})
+  _constraints.ignorePairIds = _constraints.ignorePairIds.map((id:string) => {return id.toLowerCase()})
+
   if (!srcAddr || !dstAddr) {
     log.error(`A source token address(${srcAddr}) and destination token ` +
               `address(${dstAddr}) are required.`)
@@ -353,8 +414,17 @@ export const findRoutes = async(pairGraph: any,
     return
   }
 
+  if (_constraints.ignoreTokenIds.includes(_srcAddrLC)) {
+    log.error(`Source token address, ${srcAddr}, is constrained out of the route search.`)
+    return
+  }
+  if (_constraints.ignoreTokenIds.includes(_srcAddrLC)) {
+    log.error(`Destination token address, ${dstAddr}, is constrained out of the route search.`)
+    return
+  }
+
   log.info(`Finding routes from token ${srcAddr} to token ${dstAddr} ...`)
-  const rolledRoutes = routeSearch(pairGraph, _srcAddrLC, _dstAddrLC, maxDistance)
+  const rolledRoutes = routeSearch(pairGraph, _srcAddrLC, _dstAddrLC, _constraints)
   rolledRoutes.sort((a: any, b:any) => {
     return a.length - b.length    // Ascending order by route length
   })
@@ -693,7 +763,7 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
     // the last route segment past it's counte, we know we've matched all pair ids.
     // TODO: might be cleaner with an expanded multigraph or other solution.
     //
-    // O(n^y), n=num pairs per segment, y = num segments
+    // O(n^y) worst case, n=max num pairs per segment, y = num segments
     //
     // log.debug(`Unrolling ...`)
     while (_segmentPairIndices[_segmentPairIndices.length-1] <

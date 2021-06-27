@@ -4,7 +4,6 @@ import * as config from '../config.json'
 
 const log = ds.getLog('uniswapV2')
 
-
 /**
  *  getRawPairsV2:  
  *    Call this initially with lastId = "". Then get the last id in the
@@ -40,13 +39,10 @@ const log = ds.getLog('uniswapV2')
  *   Occassionally the graph just fails on a query so there is also retry if the response is
  *   missing the data field.  The default is 5 for missingDataRetries.
  */
-export const getRawPairsV2 = async(fetchAmt: number, 
-                                lastId: string, 
-                                missingDataRetries=5): Promise<any> => 
+const getRawPairsV2 = async(fetchAmt: number, 
+                            lastId: string, 
+                            missingDataRetries=5): Promise<any> => 
 {
-  // TODO: Look into Apollo client for graphql (see uniswap info) for this.
-  //       grqphql-tag node lib for queries
-  //
   const payload = {
     query: `{
       pairs(first: ${fetchAmt}, 
@@ -139,4 +135,81 @@ export const fetchAllRawPairsV2 = async(): Promise<any> =>
   }
 
   return allRawPairData
+}
+
+// TODO: refactor and combine w/ getRawPairsV2
+const getTokensV2 = async(fetchAmt: number, 
+                          lastId: string, 
+                          missingDataRetries=5): Promise<any> => 
+{
+  const payload = {
+    query: `{
+      tokens(first: ${fetchAmt}, 
+             where: { id_gt: "${lastId}"} ) {
+        id
+        symbol
+        name
+        decimals
+      }
+    }`,
+    variables: {}
+  }
+
+  let attempt = 0
+  let response: any = undefined
+  while (attempt < missingDataRetries) {
+    try {
+      attempt++
+      response = await rest.postWithRetry(config.uniswap_v2_graph_url, payload)
+    } catch(error) {
+      throw new Error('Failed to fetch data from Uniswap V2 Graph\n' + error)
+    }
+
+    if (response && response.data && response.data.tokens) {
+      return response.data
+    } else {
+      const _responseStr = JSON.stringify(response)
+      const _responseStrShort = (_responseStr && _responseStr.length) ? 
+        _responseStr.substr(0, 1024) : _responseStr
+      log.warn(`Attempt ${attempt} of ${missingDataRetries}.`)
+      log.warn('Response from Uniswap V2 Graph does not contain property "data"\n' +
+              `  url: ${config.uniswap_v2_graph_url}\n` +
+              `  response: ${_responseStrShort}...\n` +
+              `  query: ${JSON.stringify(payload.query)}\n`)
+    }
+  }
+  return undefined
+}
+
+export const fetchAllTokensV2 = async(): Promise<any> => 
+{
+  let lastId = ''
+  let numTokensToGet = 1000
+
+  const allTokenData: any = {
+    timeMs: Date.now(),
+    tokens: []
+  }
+
+  while(numTokensToGet > 0) {
+    const rawTokenData: any = await getTokensV2(numTokensToGet, lastId)
+
+    if (!rawTokenData || !rawTokenData.hasOwnProperty('tokens')) {
+      throw new Error(`Unexpected request response. No token data received after `+
+                      `fetching ${allTokenData.tokens.length} tokens.`)
+    }
+
+    const { tokens }: any = rawTokenData
+    log.debug(`Received ${tokens.length} tokens ...`)
+    if (tokens.length < numTokensToGet) {
+      // End the loop if less than numTokensToGet received:
+      numTokensToGet = 0
+    } else if (tokens.length > 0) {
+      lastId = tokens[tokens.length - 1].id
+    }
+
+    allTokenData.tokens.push(...tokens)
+  }
+
+  return allTokenData
 }
