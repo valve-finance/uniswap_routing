@@ -464,17 +464,30 @@ export const routesToString = (rolledRoutes: any, addrSymbolLookup: any = undefi
   return _routeStr
 }
 
-const computeTradeEstimates = (pairData:any, srcAddrLC:string, dstAddrLC:string ): any => 
+const computeTradeEstimates = (pairData:any, 
+                               tokenData:any,
+                               srcAddrLC:string,
+                               amount: string): any => 
 {
-  // 0. Future TODO: determine if the pair is invalid b/c the tokens are 
-  //    bad/stale/old.
-  //
-  // TODO TODO ^^^^ TODO TODO
-
   // 1. Get token0 & token1 decimals
   //
-  const _token0Decimals = 18
-  const _token1Decimals = 18
+  const _token0IdLC = pairData.token0.id.toLowerCase()
+  const _token1IdLC = pairData.token1.id.toLowerCase()
+  
+  // TODO: convert tokenData to an O(logN) data structure
+  //
+  const _token0Data = tokenData.tokens.find((ele: any) => { return (ele.id === _token0IdLC) })
+  const _token1Data = tokenData.tokens.find((ele: any) => { return (ele.id === _token1IdLC) })
+
+  if (!_token0Data) {
+    throw new Error(`Unable to find token data for token id ${pairData.token0.id}.`)
+  }
+  if (!_token1Data) {
+    throw new Error(`Unable to find token data for token id ${pairData.token1.id}.`)
+  }
+
+  const _token0Decimals = parseInt(_token0Data.decimals)
+  const _token1Decimals = parseInt(_token1Data.decimals)
 
   // 2 Get normalized reserves (i.e. shift them both to have no decimal
   //     places but be aligned):
@@ -508,15 +521,14 @@ const computeTradeEstimates = (pairData:any, srcAddrLC:string, dstAddrLC:string 
 
   // 5. Construct the route & trade objects to determine the price impact.
   //
-  const _srcToken = (srcAddrLC === pairData.token0.id.toLowerCase()) ?
+  const _srcToken = (srcAddrLC === _token0IdLC) ?
       { obj: _token0, decimals: _token0Decimals } :
       { obj: _token1, decimals: _token1Decimals }
 
-  const valueTODO = '1'
   const _route = new Route([_pair], _srcToken.obj)
   const _trade = new Trade(_route,
                             new TokenAmount(_srcToken.obj, 
-                                            n.getNormalizedValue(valueTODO, _srcToken.decimals)),
+                                            n.getNormalizedValue(amount, _srcToken.decimals)),
                             TradeType.EXACT_INPUT)
   return {
     route: _route,
@@ -524,7 +536,7 @@ const computeTradeEstimates = (pairData:any, srcAddrLC:string, dstAddrLC:string 
   }
 }
 
-export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
+export const printRouteCosts = (numPairData: any, tokenData: any, rolledRoutes: any, amount: string): string =>
 {
   let _routeCostStr = '\n'
   let _routeNum = 0
@@ -544,7 +556,7 @@ export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
         for (const _pairData of numPairData.pairs) {
           if (_pairData.id === _pairId) {
             try {
-              const est = computeTradeEstimates(_pairData, _srcAddr, _dstAddr)
+              const est = computeTradeEstimates(_pairData, tokenData, _srcAddr, amount)
 
               _routeCostStr += `     pair (${_pairId}):  ${est.trade.priceImpact.toSignificant(3)}\n`
               // _routeCostStr += `      Pair ${_pairId}:\n` +
@@ -681,6 +693,8 @@ export const printRouteCosts = (numPairData: any, rolledRoutes: any): string =>
  *    - heuristics
  */
 export const costRolledRoutes = (numPairData: any,
+                                 tokenData: any,
+                                 amount: string,
                                  rolledRoutes: any): any =>
 {
   const _costedRolledRoutes :any = []
@@ -694,15 +708,19 @@ export const costRolledRoutes = (numPairData: any,
         dst: _pair.dst,
         pairs: []
       }
+      // log.debug(`costRolledRoutes:\n` +
+      //           `pair - ${JSON.stringify(_pair, null, 2)}\n` +
+      //           `_route - ${JSON.stringify(_route, null, 2)}\n`)
+
       const _srcAddr = _pair.src.toLowerCase()
-      const _dstAddr = _pair.src.toLowerCase()
+      const _dstAddr = _pair.dst.toLowerCase()
 
       for (const _pairId of _pair.pairIds) {
 
         for (const _pairData of numPairData.pairs) {
           if (_pairData.id === _pairId) {
             try {
-              const est = computeTradeEstimates(_pairData, _srcAddr, _dstAddr)
+              const est = computeTradeEstimates(_pairData, tokenData, _srcAddr, amount)
               const impact = est.trade.priceImpact.toSignificant(3)
               _costedSegment.pairs.push({
                 id: _pairId,

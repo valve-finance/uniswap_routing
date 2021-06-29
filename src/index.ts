@@ -194,6 +194,7 @@ const nonHubRoutes = async(minLiquidityUSD=10000, maxRoutes=100): Promise<void> 
 
   // 4. For each token id in the unique list, try to compute a route to each other token id
   //      - O(n^2)
+  //      - Ignore routes that don't have any hops (i.e. a single pool)
   const routeResults: any = {}
   let routeAttemptCount = 0
   let routeTimeSumMS = 0
@@ -214,6 +215,19 @@ const nonHubRoutes = async(minLiquidityUSD=10000, maxRoutes=100): Promise<void> 
         routeAttemptCount++
 
         if (_routes.length) {
+          let singlePoolFound = false
+          // Check to ensure determined route(s) does not include a single pool:
+          for (const _route of _routes) {
+            if (_route.length <= 1) {
+              singlePoolFound = true
+              // log.debug(`Single pool found for ${resultKey}:\n${JSON.stringify(_route, null, 2)}\n`)
+              break
+            }
+          }
+          if (singlePoolFound) {    // Skip this src-dst as it has it's own pool.
+            continue
+          }
+
           // log.debug(`(${durationMS} ms): Found routes from ${srcTokenIdLC} to ${dstTokenIdLC}.`)
           routeResults[resultKey] = _routes
           // } else {
@@ -237,13 +251,18 @@ const nonHubRoutes = async(minLiquidityUSD=10000, maxRoutes=100): Promise<void> 
 
     let routeIndex = 0
     let maxRouteLiquidity = 0
+    let routeIdStr = ''
+
     for (const routeData of routesData) {
       routeIndex++
+
+      const routeIds: string[] = []
 
       // Determine the maximum liquidity through the entire trade (i.e. if one segment has lower
       // liquidity than another, then it is the maximum liquidity possible for a single path trade):
       //
       let maxSegmentLiquidity = -1
+      let segIdx = 0
       for (const segment of routeData) {
         let maxPairLiquidity = 0
         for (const pairId of segment.pairIds) {
@@ -253,6 +272,7 @@ const nonHubRoutes = async(minLiquidityUSD=10000, maxRoutes=100): Promise<void> 
               const reserveUSDFloat = parseFloat(pairData.reserveUSD)   // TODO: bignum or bigdec
               if (reserveUSDFloat > maxPairLiquidity) {
                 maxPairLiquidity = reserveUSDFloat
+                routeIds[segIdx] = pairId
               }
             }
           }
@@ -260,23 +280,26 @@ const nonHubRoutes = async(minLiquidityUSD=10000, maxRoutes=100): Promise<void> 
         if (maxSegmentLiquidity === -1 || maxSegmentLiquidity > maxPairLiquidity) {
           maxSegmentLiquidity = maxPairLiquidity
         }
+        segIdx++
       }
 
       routeData['maxSegmentLiquidity'] = maxSegmentLiquidity
       //log.info(`${symbolKey} #${routeIndex}: $${maxSegmentLiquidity} USD`)
       if (maxSegmentLiquidity > maxRouteLiquidity) {
         maxRouteLiquidity = maxSegmentLiquidity
+        routeIdStr = routeIds.join(' -> ')
       }
     }
     routeReport.push({
       symbolKey,
-      maxRouteLiquidity
+      maxRouteLiquidity,
+      routeIdStr
     })
   }
   routeReport.sort((a: any, b:any) => {return b.maxRouteLiquidity - a.maxRouteLiquidity})  // Desc. order
   for (let index = 0; index < maxRoutes; index++) {
     let leftStr =_padStr(`${index+1}. ` + routeReport[index].symbolKey + ' :') 
-    log.info(`${leftStr}\t${routeReport[index].maxRouteLiquidity.toFixed(2)} USD route liquidity`)
+    log.info(`${leftStr}\t${routeReport[index].maxRouteLiquidity.toFixed(2)} liquidity(USD)\t${routeReport[index].routeIdStr}`)
   }
 }
 
@@ -365,9 +388,11 @@ const shell = async(): Promise<void> => {
           // const _routeStr = cmds.routesToString(_rolledRoutes)
           // log.info(_routeStr)
 
-          // const _routeCostStr = cmds.printRouteCosts(_uniData.numPairData, _routes)
+          // const _routeCostStr = cmds.printRouteCosts(_uniData.numPairData, _uniData.tokenData, _routes, _amtPayToken.toString())
           // log.info(_routeCostStr)
           const _costedRolledRoutes = cmds.costRolledRoutes(_uniData.numPairData,
+                                                            _uniData.tokenData,
+                                                            _amtPayToken.toString(),
                                                             _rolledRoutes)
           
           const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes)
@@ -504,14 +529,18 @@ const server = async(port: string): Promise<void> => {
                                                          dest,
                                                          maxHops)
         const _costedRolledRoutes = cmds.costRolledRoutes(_uniData.numPairData,
+                                                          _uniData.tokenData,
+                                                          amount,
                                                           _rolledRoutes)
-        const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes)
+        const maxImpact = 25.0
+        const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes, maxImpact)
 
         result.routes = _unrolledRoutes.slice(0, maxResults) // Return the 1st 5 ele
                                                     // TODO: make this a setting
       }
 
       log.debug(`Processed request in ${Date.now() - _startMs} ms`)
+      // log.debug(`result:\n${JSON.stringify(result, null, 2)}`)
       res.status(OK).json(result)
     } catch (error) {
       log.error(error)
