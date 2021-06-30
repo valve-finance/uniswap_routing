@@ -82,7 +82,7 @@ export const server = async(port: string): Promise<void> => {
         if (amount) {
           let amountValue = parseFloat(amount)
           if (isNaN(amountValue) || amountValue < 0) {
-            sanitizeStr += '"amount" must be a string that parses to a number greater than 0.'
+            sanitizeStr += '"amount" must be a string that parses to a number greater than 0.\n'
           }
         }
 
@@ -121,13 +121,13 @@ export const server = async(port: string): Promise<void> => {
               }
 
               if (isNaN(value)) {
-                sanitizeStr += `options.${property} cannot be parsed from a string to a ${propertyParams.type}.`
+                sanitizeStr += `options.${property} cannot be parsed from a string to a ${propertyParams.type}.\n`
                 continue
               }
 
               if (value > propertyParams.max || value < propertyParams.min) {
                 sanitizeStr += `options.${property} must be parsable from a string to a ${propertyParams.type} ` +
-                               `between ${propertyParams.min} and ${propertyParams.max}, inclusive.`
+                               `between ${propertyParams.min} and ${propertyParams.max}, inclusive.\n`
                 continue
               }
 
