@@ -1,0 +1,46 @@
+import * as t from './types'
+
+export const noHubTokenCnstr: t.Constraints = {
+  maxDistance: 3,
+  ignoreTokenIds: [
+    // WETH:
+    "0x477b466750c31c890db3208816d60c8585be7f0e",
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "0xd73d6d4c463df976399acd80ea338384e247c64b",
+    // DAI:
+    "0x6b175474e89094c44da98b954eedeac495271d0f",
+    "0x89d24a6b4ccb1b6faa2625fe562bdd9a23260359",
+    "0xf035f1fbdae1aedb952f904c641e7db1a2a52537",
+    // USDC:
+    "0x0432aac809b2c07249dbc04cc5f2337091dd6e87",
+    "0x2cd68ecf48b0687c95ee6c06d33389688c3cbb8e",
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "0xacf9ea5062193181120832baf6d49f5ab992338b",
+    "0xc93a59888e7e6f2849ba94acf767266299c4c415",   // <-- ?
+    "0xefb9326678757522ae4711d7fb5cf321d6b664e6",   // <-- ?
+    // USDT:
+    "0x2f34f846f57e5e31975fa29ffcceb4d84a441abb",
+    "0x409ff99dc752e53e16cde354645cfaf0410a874a",
+    "0x51e1ccbea22d51c8e919e85908f6490838549ff5",
+    "0x601886880af940b261fef86572e1310d2787413d",
+    "0x6070c2215a18cd8efaf340166876ac9ce4d1e79b",
+    "0x632f2894cb421d0b09a9ae361a5db3f0163fce2d",
+    "0x682dae1bf00cbd79798c8eafc9a9fe1f1cb6befd",
+    "0x69d8f39cbeb10085b787a3f30cdaaba824cc1a27",
+    "0x78f825c0e8eee5661d1c6bb849a4e32d5addb746",
+    "0xa06725a857f26aa18f80dfad5e4a7f7e2fec2eef",
+    "0xa2065164a26ecd3775dcf22510ad1d2daef8bd2a",
+    "0xb0c158fdf257d601386612d0bd15d5bd4acee7d2",
+    "0xc220b5df13bc1917bb692e70a84044bd9067ccc0",
+    "0xc48e6a12c97ad930d9d5320376dfd821dcd3ab04",
+    "0xdac17f958d2ee523a2206206994597c13d831ec7",
+    "0xef1d5af0928f19d264f2febdfeb2d950aaaed8d1",
+    // COMP:
+    "0xb7096f353ffc826d1e65b01bcb43d55ba8aa55e7",
+    "0xc00e94cb662c3520282e6f5717214004a7f26888",
+    "0xeba1b95ac453291ae3156fa183b1460cff1905f2",
+    // MKR:
+    "0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2",
+    "0xb2a9a0f34e3140de9b9a489b33fc049102a1808e"
+  ]
+}

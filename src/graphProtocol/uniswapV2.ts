@@ -1,6 +1,7 @@
 import * as ds from '../utils/debugScopes'
 import * as rest from '../utils/rest'
 import * as config from '../config.json'
+import * as t from './../utils/types'
 
 const log = ds.getLog('uniswapV2')
 
@@ -104,26 +105,22 @@ const getRawPairsV2 = async(fetchAmt: number,
  *    - Look at got pagination for this
  *    - Look at extracting an error for the unexpected condition termination
  */
-export const fetchAllRawPairsV2 = async(): Promise<any> =>
+export const fetchAllRawPairsV2 = async(): Promise<t.Pairs> =>
 {
   let lastId = ''
   let numPairsToGet = 1000
 
-  const allRawPairData: any = {
-    timeMs: Date.now(),
-    pairs: []
-  }
+  const pairArr: any = []
 
   while(numPairsToGet > 0) {
     const rawPairData: any = await getRawPairsV2(numPairsToGet, lastId)
 
     if (!rawPairData || !rawPairData.hasOwnProperty('pairs')) {
       throw new Error(`Unexpected request response. No pair data received after `+
-                      `fetching ${allRawPairData.pairs.length} pairs.`)
+                      `fetching ${pairArr.length} pairs.`)
     }
 
     const { pairs }: any = rawPairData
-    log.debug(`Received ${pairs.length} pairs ...`)
     if (pairs.length < numPairsToGet) {
       // End the loop if less than numPairsToGet received:
       numPairsToGet = 0
@@ -131,10 +128,17 @@ export const fetchAllRawPairsV2 = async(): Promise<any> =>
       lastId = pairs[pairs.length - 1].id
     }
 
-    allRawPairData.pairs.push(...pairs)
+    pairArr.push(...pairs)
+    log.debug(`Received ${pairs.length} pairs (total received: ${pairArr.length}) ...`)
   }
 
-  return allRawPairData
+  // Convert from array to object/dictionary storage of pairs based on id:
+  const allPairs = new t.Pairs()
+  for (const pair of pairArr) {
+    allPairs.addPair(pair)
+  }
+
+  return allPairs 
 }
 
 // TODO: refactor and combine w/ getRawPairsV2
@@ -181,26 +185,22 @@ const getTokensV2 = async(fetchAmt: number,
   return undefined
 }
 
-export const fetchAllTokensV2 = async(): Promise<any> => 
+export const fetchAllTokensV2 = async(): Promise<t.Tokens> => 
 {
   let lastId = ''
   let numTokensToGet = 1000
 
-  const allTokenData: any = {
-    timeMs: Date.now(),
-    tokens: []
-  }
+  const tokenArr: any = []
 
   while(numTokensToGet > 0) {
     const rawTokenData: any = await getTokensV2(numTokensToGet, lastId)
 
     if (!rawTokenData || !rawTokenData.hasOwnProperty('tokens')) {
       throw new Error(`Unexpected request response. No token data received after `+
-                      `fetching ${allTokenData.tokens.length} tokens.`)
+                      `fetching ${tokenArr.length} tokens.`)
     }
 
     const { tokens }: any = rawTokenData
-    log.debug(`Received ${tokens.length} tokens ...`)
     if (tokens.length < numTokensToGet) {
       // End the loop if less than numTokensToGet received:
       numTokensToGet = 0
@@ -208,8 +208,15 @@ export const fetchAllTokensV2 = async(): Promise<any> =>
       lastId = tokens[tokens.length - 1].id
     }
 
-    allTokenData.tokens.push(...tokens)
+    tokenArr.push(...tokens)
+    log.debug(`Received ${tokens.length} tokens (total received ${tokenArr.length}) ...`)
   }
 
-  return allTokenData
+  // Convert from array to object/dictionary storage of pairs based on id
+  const _allTokens = new t.Tokens()
+  for (const token of tokenArr) {
+    _allTokens.addToken(token)
+  }
+
+  return _allTokens
 }
