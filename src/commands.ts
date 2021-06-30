@@ -569,7 +569,7 @@ export const costRolledRoutes = (allPairData: t.Pairs,
               }
             })
           } catch(error) {
-            // log.error(`Failed computing impact estimates for ${_srcAddr} --> ${_dstAddr}: ${error}`)
+            log.error(`Failed computing impact estimates for ${_srcAddr} --> ${_dstAddr}: ${error}`)
             // Super verbose version for debugging ...
             // log.error(`Failed computing impact estimates for ${_srcAddr} --> ${_dstAddr}:\n` +
             //           `${JSON.stringify(_pairData, null, 2)}\n` +
@@ -585,7 +585,7 @@ export const costRolledRoutes = (allPairData: t.Pairs,
       // In this situation, a costed segment may have no pairs and thus the route
       // cannot be completed, so we skip costing the remainder of the route and do not add it.
       if (_costedSegment.pairs.length === 0) {
-        // log.debug(`Failed routed detected for ${_srcAddr} --> ${_dstAddr}`)
+        log.debug(`Failed routed detected for ${_srcAddr} --> ${_dstAddr}`)
         failedRoute = true
       }
       _costedRoute.push(_costedSegment)

@@ -7,6 +7,7 @@ import http from 'http'
 import cors from 'cors'
 import helmet from 'helmet'
 import requestIp from 'request-ip'
+import { sanitizeProperty, sanitizePropertyType } from '../utils/misc'
 
 const rateLimitMem = require('./../middleware/rateLimiterMem.js')
 
@@ -48,7 +49,7 @@ export const server = async(port: string): Promise<void> => {
   })
 
   const MAX_HOPS = 3
-  const MAX_RESULTS = 10
+  const MAX_RESULTS = 100
   app.post(/.*/, async (req:any, res:any) => {
     try {
       const _startMs = Date.now()
@@ -67,50 +68,103 @@ export const server = async(port: string): Promise<void> => {
       }
 
       const { route } = body
+      let statusCode = OK
       if (body) {
-        // TODO: sanity check on route object
         const {source, dest, amount, options} = route
-        // TODO: support amount and options
-        let maxHops = 3
-        let maxResults = 5
-        let maxImpact = 25.0
-        log.debug(options)
-        if (options) {
-          if (options.hasOwnProperty('max_hops')) {
-            maxHops = (options.max_hops > 0 && options.max_hops <= MAX_HOPS) ? 
-              options.max_hops : maxHops
-          }
-          if (options.hasOwnProperty('max_results')) {
-            maxResults = (options.max_results > 0 && options.max_results <= MAX_RESULTS) ? 
-              options.max_results : maxResults
-          }
-          if (options.hasOwnProperty('max_impact')) {
-            maxImpact = (options.max_impact > 0.0 && options.max_impact < 100.0) ?
-              options.max_impact : maxImpact
-          }
-        }
-        log.debug(`maxHops: ${maxHops}, maxResults: ${maxResults}`)
-        const constraints: t.Constraints = {
-          maxDistance: maxHops
-        }
-        const _rolledRoutes: any = await cmds.findRoutes(_uniData.pairGraph,
-                                                         source,
-                                                         dest,
-                                                         constraints)
-        const _costedRolledRoutes = cmds.costRolledRoutes(_uniData.pairData,
-                                                          _uniData.tokenData,
-                                                          amount,
-                                                          _rolledRoutes)
-        const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes, maxImpact)
+        // log.debug(`Request: \n` +
+        //           `source: ${source} (amount: ${amount} - typeof ${typeof amount})\n` +
+        //           `dest: ${dest}\n` +
+        //           `options: ${JSON.stringify(options)}`)
 
-        result.routes = _unrolledRoutes.slice(0, maxResults)
+        let sanitizeStr = sanitizeProperty('source', source)
+        sanitizeStr += sanitizeProperty('dest', dest)
+        sanitizeStr += sanitizeProperty('amount', amount)
+        if (amount) {
+          let amountValue = parseFloat(amount)
+          if (isNaN(amountValue) || amountValue < 0) {
+            sanitizeStr += '"amount" must be a string that parses to a number greater than 0.'
+          }
+        }
+
+        const _options: any = {
+          max_hops: {
+            value: 3,
+            min: 1,
+            max: MAX_HOPS,
+            type: 'int'
+          },
+          max_results: {
+            value: 5,
+            min: 1,
+            max: MAX_RESULTS,
+            type: 'int'
+          },
+          max_impact: {
+            value: 25.0,
+            min: 0.0,
+            max: 100.0,
+            type: 'float'
+          }
+        }
+
+        if (options) {
+          for (const property in _options) {
+            if (options.hasOwnProperty(property)) {
+              const propertyParams = _options[property]
+              sanitizeStr += sanitizePropertyType(`options.${property}`, options[property])
+
+              let value: number = NaN
+              if (propertyParams.type === 'int') {
+                value = parseInt(options[property])
+              } else if (propertyParams.type === 'float') {
+                value = parseFloat(options[property])
+              }
+
+              if (isNaN(value)) {
+                sanitizeStr += `options.${property} cannot be parsed from a string to a ${propertyParams.type}.`
+                continue
+              }
+
+              if (value > propertyParams.max || value < propertyParams.min) {
+                sanitizeStr += `options.${property} must be parsable from a string to a ${propertyParams.type} ` +
+                               `between ${propertyParams.min} and ${propertyParams.max}, inclusive.`
+                continue
+              }
+
+              _options[property].value = value
+            }
+          }
+        }
+
+        if (sanitizeStr !== '') {
+          statusCode = BAD_REQUEST
+          result.error = sanitizeStr
+          log.debug(sanitizeStr)
+        } else {
+          const constraints: t.Constraints = {
+            maxDistance: _options.max_hops.value
+          }
+          const _rolledRoutes: any = await cmds.findRoutes(_uniData.pairGraph,
+                                                          source,
+                                                          dest,
+                                                          constraints)
+          
+          const _costedRolledRoutes = cmds.costRolledRoutes(_uniData.pairData,
+                                                            _uniData.tokenData,
+                                                            amount,
+                                                            _rolledRoutes)
+          const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes,
+                                                                _options.max_impact.value)
+
+          result.routes = _unrolledRoutes.slice(0, _options.max_results.value)
+        }
       }
 
       log.debug(`Processed request in ${Date.now() - _startMs} ms`)
-      // log.debug(`result:\n${JSON.stringify(result, null, 2)}`)
-      res.status(OK).json(result)
+      res.status(statusCode).json(result)
     } catch (error) {
       log.error(error)
+      res.status(INTERNAL_SERVER_ERROR).json({error: 'Internal Server Error'})
     }
   })
  
