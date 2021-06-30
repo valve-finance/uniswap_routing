@@ -154,6 +154,7 @@ export const server = async(port: string): Promise<void> => {
                                                             amount,
                                                             _rolledRoutes)
           const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes,
+                                                                _uniData.tokenData,
                                                                 _options.max_impact.value)
 
           result.routes = _unrolledRoutes.slice(0, _options.max_results.value)

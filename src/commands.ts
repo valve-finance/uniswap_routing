@@ -568,12 +568,12 @@ export const costRolledRoutes = (allPairData: t.Pairs,
                 id: _pairData.token1.id
               }
             })
-          } catch(error) {
-            log.error(`Failed computing impact estimates for ${_srcAddr} --> ${_dstAddr}: ${error}`)
+          } catch(ignoredError) {
+            // log.warn(`Failed computing impact estimates for ${_srcAddr} --> ${_dstAddr}: ${ignoredError}`)
             // Super verbose version for debugging ...
-            // log.error(`Failed computing impact estimates for ${_srcAddr} --> ${_dstAddr}:\n` +
-            //           `${JSON.stringify(_pairData, null, 2)}\n` +
-            //           error)
+            // log.warn(`Failed computing impact estimates for ${_srcAddr} --> ${_dstAddr}:\n` +
+            //          `${JSON.stringify(_pairData, null, 2)}\n` +
+            //          ignoredError)
           }
         }
       }
@@ -585,7 +585,7 @@ export const costRolledRoutes = (allPairData: t.Pairs,
       // In this situation, a costed segment may have no pairs and thus the route
       // cannot be completed, so we skip costing the remainder of the route and do not add it.
       if (_costedSegment.pairs.length === 0) {
-        log.debug(`Failed routed detected for ${_srcAddr} --> ${_dstAddr}`)
+        // log.debug(`Failed routed detected for ${_srcAddr} --> ${_dstAddr}`)
         failedRoute = true
       }
       _costedRoute.push(_costedSegment)
@@ -600,6 +600,7 @@ export const costRolledRoutes = (allPairData: t.Pairs,
 }
 
 export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
+                                         tokenData: t.Tokens,
                                          maxImpact=10.0): any =>
 {
   let routeNum = 0
@@ -638,6 +639,7 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
         totalImpact: 0,
         numSwaps: 0,
         routeStr: '',
+        routeIdStr: '',
         srcData: {
           symbol: '',
           name: '',
@@ -674,8 +676,13 @@ export const unrollCostedRolledRoutes = (costedRolledRoutes: any,
         const _totalImpact = _routeObj.totalImpact + parseFloat(_pairData.impact)
         _routeObj.totalImpact = (_totalImpact < 100.0) ? _totalImpact : 100.0
         _routeObj.numSwaps++
-        _routeObj.routeStr += (_segmentIndex === 0) ?
-            `${_segment.src} -> ${_segment.dst}` : ` -> ${_segment.dst}`
+        if (_segmentIndex === 0) {
+          _routeObj.routeStr += `${tokenData.getSymbol(_segment.src)} -> ${tokenData.getSymbol(_segment.dst)}`
+          _routeObj.routeIdStr += `${_segment.src} -> ${_segment.dst}`
+        } else {
+          _routeObj.routeStr += ` -> ${tokenData.getSymbol(_segment.dst)}`
+          _routeObj.routeIdStr += ` -> ${_segment.dst}`
+        }
         _routeObj.orderedSwaps.push({
           src: _segment.src,
           dst: _segment.dst,

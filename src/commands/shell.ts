@@ -101,7 +101,8 @@ export const shell = async(): Promise<void> => {
                                                             _amtPayToken.toString(),
                                                             _rolledRoutes)
           
-          const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes)
+          const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes,
+                                                                _uniData.tokenData)
           log.info(`Unrolled routes:\n${JSON.stringify(_unrolledRoutes, null, 2)}`)
         }
         break;
