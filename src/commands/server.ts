@@ -145,25 +145,36 @@ export const server = async(port: string): Promise<void> => {
           const constraints: t.Constraints = {
             maxDistance: _options.max_hops.value
           }
-          const _rolledRoutes: any = await r.findRoutes(_uniData.pairGraph,
-                                                          source,
-                                                          dest,
-                                                          constraints)
-          
-          const _costedRolledRoutes = r.costRolledRoutes(_uniData.pairData,
-                                                            _uniData.tokenData,
-                                                            amount,
-                                                            _rolledRoutes)
-          const _unrolledRoutes = r.unrollCostedRolledRoutes(_costedRolledRoutes,
-                                                                _uniData.tokenData,
-                                                                _options.max_impact.value)
+          const _stackedRoutes: t.VFStackedRoutes = await r.findRoutes(_uniData.pairGraph,
+                                                                       source,
+                                                                       dest,
+                                                                       constraints)
 
-          result.routes = _unrolledRoutes.slice(0, _options.max_results.value)
+          const _routes: t.VFRoutes = r.unstackRoutes(_stackedRoutes)
+          // log.debug(`All routes:\n${JSON.stringify(_routes, null, 2)}`)
+
+          const _costedRoutes: t.VFRoutes = r.costRoutes(_uniData.pairData,
+                                                         _uniData.tokenData,
+                                                         _routes,
+                                                         amount,
+                                                         _options.max_impact.value)
+          
+          const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(_uniData.pairData,
+                                                              _uniData.tokenData,
+                                                              _costedRoutes)
+
+          _legacyFmtRoutes.sort((a: any, b: any) => {
+            return parseFloat(b.amountOut) - parseFloat(a.amountOut)    // Sort descending by amount of dest token received.
+                                                                        // TODO: fix to handle higher precision.
+          })
+
+          result.routes = _legacyFmtRoutes.slice(0, _options.max_results.value)
         }
       }
 
       log.debug(`Processed request in ${Date.now() - _startMs} ms`)
       res.status(statusCode).json(result)
+      log.debug(`Returned result.routes:\n${JSON.stringify(result.routes, null, 2)}`)
     } catch (error) {
       log.error(error)
       res.status(INTERNAL_SERVER_ERROR).json({error: 'Internal Server Error'})

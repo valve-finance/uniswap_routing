@@ -337,6 +337,8 @@ export const convertRoutesToLegacyFmt = (allPairData: t.Pairs, tokenData: t.Toke
       routeIdStr,
       srcData,
       dstData,
+      amountIn,
+      amountOut,
       orderedSwaps
     }
 

@@ -96,6 +96,7 @@ export const shell = async(): Promise<void> => {
               await r.findRoutes(_uniData.pairGraph, _payToken, _buyToken, constraints)
 
           const _routes = r.unstackRoutes(_stackedRoutes)
+
           const _costedRoutes = r.costRoutes(_uniData.pairData,
                                              _uniData.tokenData,
                                              _routes, _amtPayToken,
