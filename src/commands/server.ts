@@ -158,6 +158,7 @@ export const server = async(port: string): Promise<void> => {
                                                          _routes,
                                                          amount,
                                                          _options.max_impact.value)
+          // log.debug(`Costed routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
           
           const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(_uniData.pairData,
                                                               _uniData.tokenData,
@@ -174,7 +175,7 @@ export const server = async(port: string): Promise<void> => {
 
       log.debug(`Processed request in ${Date.now() - _startMs} ms`)
       res.status(statusCode).json(result)
-      log.debug(`Returned result.routes:\n${JSON.stringify(result.routes, null, 2)}`)
+      // log.debug(`Returned result.routes:\n${JSON.stringify(result.routes, null, 2)}`)
     } catch (error) {
       log.error(error)
       res.status(INTERNAL_SERVER_ERROR).json({error: 'Internal Server Error'})

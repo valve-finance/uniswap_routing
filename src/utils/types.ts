@@ -159,23 +159,6 @@ export type VFRoute = VFSegment[]
 export type VFRoutes = VFRoute[]
 
 /*
- * CostedRolledRoutes:
- */
-export interface VFCostedPair {
-  id: string;
-  impact: number;
-  token0: Token;
-  token1: Token;
-}
-export interface VFCostedSegmentPairs {
-  src: string;
-  dst: string;
-  pairs: VFCostedPair[];
-}
-export type VFCostedRouteSegments = VFCostedSegmentPairs[]
-export type VFCostedRolledRoutes = VFCostedRouteSegments[]
-
-/*
  *  Other Misc. types
  */
 // TODO: turn into a class with methods that LC Ids added etc.
