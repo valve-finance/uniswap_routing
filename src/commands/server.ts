@@ -1,13 +1,14 @@
 import * as ds from './../utils/debugScopes'
 import * as t from './../utils/types'
-import * as cmds from './../commands'
+import { sanitizeProperty, sanitizePropertyType } from '../utils/misc'
+import * as r from './../utils/routing'
+import { initUniData } from '../utils/data'
 
 import express from 'express'
 import http from 'http'
 import cors from 'cors'
 import helmet from 'helmet'
 import requestIp from 'request-ip'
-import { sanitizeProperty, sanitizePropertyType } from '../utils/misc'
 
 const rateLimitMem = require('./../middleware/rateLimiterMem.js')
 
@@ -29,7 +30,7 @@ export const server = async(port: string): Promise<void> => {
       type: 'integer'
     }
   }
-  let _uniData: t.UniData = await cmds.initUniData()
+  let _uniData: t.UniData = await initUniData()
 
   const app = express()
   app.set('trust proxy', true)
@@ -144,16 +145,16 @@ export const server = async(port: string): Promise<void> => {
           const constraints: t.Constraints = {
             maxDistance: _options.max_hops.value
           }
-          const _rolledRoutes: any = await cmds.findRoutes(_uniData.pairGraph,
+          const _rolledRoutes: any = await r.findRoutes(_uniData.pairGraph,
                                                           source,
                                                           dest,
                                                           constraints)
           
-          const _costedRolledRoutes = cmds.costRolledRoutes(_uniData.pairData,
+          const _costedRolledRoutes = r.costRolledRoutes(_uniData.pairData,
                                                             _uniData.tokenData,
                                                             amount,
                                                             _rolledRoutes)
-          const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes,
+          const _unrolledRoutes = r.unrollCostedRolledRoutes(_costedRolledRoutes,
                                                                 _uniData.tokenData,
                                                                 _options.max_impact.value)
 

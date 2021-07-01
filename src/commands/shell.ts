@@ -1,6 +1,7 @@
 import * as ds from './../utils/debugScopes'
 import * as t from './../utils/types'
-import * as cmds from './../commands'
+import * as r from './../utils/routing'
+import { initUniData } from '../utils/data'
 
 import * as readline from 'readline'
 
@@ -28,10 +29,15 @@ export const shell = async(): Promise<void> => {
       description: 'The maximum number of hops allowed by the router.',
       value: 2,
       type: 'integer'
+    },
+    maxImpact: {
+      description: 'The maximum impact on the trade from liquidity limitations (slippage).',
+      value: 10.0,
+      type: 'float'
     }
   }
 
-  let _uniData: t.UniData = await cmds.initUniData()
+  let _uniData: t.UniData = await initUniData()
 
   let command = ''
   while (command.toLowerCase() !== 'q') {
@@ -86,30 +92,27 @@ export const shell = async(): Promise<void> => {
           const constraints: t.Constraints = {
             maxDistance: _settings["maxHops"].value
           }
-          const _rolledRoutes: any = await cmds.findRoutes(_uniData.pairGraph,
-                                                           _payToken,
-                                                           _buyToken,
-                                                           constraints)
+          const _stackedRoutes: t.VFStackedRoutes = 
+              await r.findRoutes(_uniData.pairGraph, _payToken, _buyToken, constraints)
 
-          // const _routeStr = cmds.routesToString(_rolledRoutes)
-          // log.info(_routeStr)
-
-          // const _routeCostStr = cmds.printRouteCosts(_uniData.pairData, _uniData.tokenData, _routes, _amtPayToken.toString())
-          // log.info(_routeCostStr)
-          const _costedRolledRoutes = cmds.costRolledRoutes(_uniData.pairData,
-                                                            _uniData.tokenData,
-                                                            _amtPayToken.toString(),
-                                                            _rolledRoutes)
+          const _routes = r.unstackRoutes(_stackedRoutes)
+          const _costedRoutes = r.costRoutes(_uniData.pairData,
+                                             _uniData.tokenData,
+                                             _routes, _amtPayToken,
+                                             _settings['maxImpact'].value)
+          // log.info(`Routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
           
-          const _unrolledRoutes = cmds.unrollCostedRolledRoutes(_costedRolledRoutes,
-                                                                _uniData.tokenData)
-          log.info(`Unrolled routes:\n${JSON.stringify(_unrolledRoutes, null, 2)}`)
+          const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(_uniData.pairData,
+                                                              _uniData.tokenData,
+                                                              _costedRoutes)
+          
+          log.info(`Costed routes:\n${JSON.stringify(_legacyFmtRoutes, null, 2)}`)
         }
         break;
       
       case 'r':
         log.info('Refreshing all data ...')
-        _uniData = await cmds.initUniData(true)
+        _uniData = await initUniData(true)
         break;
       
       case 't':
@@ -129,7 +132,7 @@ export const shell = async(): Promise<void> => {
                 break;
 
               case "float":
-                const _tempFloat= parseInt(_value)
+                const _tempFloat= parseFloat(_value)
                 if (_tempFloat > 0.0) {
                   _setting.value = _tempFloat
                 } else {

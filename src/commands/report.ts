@@ -2,14 +2,15 @@ import * as ds from './../utils/debugScopes'
 import * as t from './../utils/types'
 import * as c from './../utils/constants'
 import * as m from './../utils/misc'
-import * as cmds from './../commands'
+import * as r from './../utils/routing'
+import { initUniData } from '../utils/data'
 
 const log = ds.getLog('test')
 
 export const report = async(minLiquidityUSD=10000, 
                             minTokenReserves=10000,
                             maxRoutes=100): Promise<void> => {
-  const _uniData: t.UniData = await cmds.initUniData()
+  const _uniData: t.UniData = await initUniData()
   
   // 1. Gather all pairs with USD liquidity greater than <X> USD
   // 2. Remove pairs containing any of the hub token ids
@@ -65,7 +66,7 @@ export const report = async(minLiquidityUSD=10000,
       const resultKey = `${srcTokenIdLC}-${dstTokenIdLC}`
       if (!routeResults.hasOwnProperty(resultKey)) {
         const startMS = Date.now()
-        const _routes = await cmds.findRoutes(_uniData.pairGraph, srcTokenIdLC, dstTokenIdLC, c.noHubTokenCnstr)
+        const _routes = await r.findRoutes(_uniData.pairGraph, srcTokenIdLC, dstTokenIdLC, c.noHubTokenCnstr)
         const durationMS = Date.now() - startMS
         routeTimeSumMS += durationMS
         routeAttemptCount++

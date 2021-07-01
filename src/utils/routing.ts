@@ -1,9 +1,6 @@
-import { DateTime, Interval, Duration } from 'luxon'
-import * as uniGraphV2 from './graphProtocol/uniswapV2'
-import * as ds from './utils/debugScopes'
-import * as p from './utils/persistence'
-import * as n from './utils/normalize'
-import * as t from './utils/types'
+import * as ds from './debugScopes'
+import * as t from './types'
+import { getIntegerString  } from './misc'
 import { ChainId,
          Token,
          WETH,
@@ -11,178 +8,19 @@ import { ChainId,
          Route,
          Trade,
          TradeType, 
-         Pair} from '@uniswap/sdk'
+         Pair,
+         Fraction} from '@uniswap/sdk'
 import { getAddress } from '@ethersproject/address'
-
-// TODO: switch bigdecimal to https://github.com/MikeMcl/bignumber.js/
-//
-const bigdecimal = require('bigdecimal')
-const graphlib = require('@dagrejs/graphlib')
+import JSBI from 'jsbi'
 
 const log = ds.getLog('commands')
-const ALL_PAIRS_FILE = 'all_pairs_v2.json'
-const ALL_TOKENS_FILE = 'all_tokens.json'
-const MAX_DATA_AGE = Duration.fromObject({ days: 5 })
 
-export const initUniData = async(force=false): Promise<t.UniData> => {
-  log.info('Initializing Uniswap data. Please wait (~ 1 min.) ...')
 
-  const _rawPairData: any = await getPairData({ignorePersisted: force})
-  const _allTokenData: any = await getTokenData({ignorePersisted: force})
-  const _pairGraph: any = await constructPairGraph(_rawPairData)
-
-  return {
-    pairGraph: _pairGraph,
-    tokenData: _allTokenData,
-    pairData: _rawPairData
-  }
-}
-
-/**
- * getPairData:
- * @param options 
- * @returns 
- * 
- * TODO:
- *        - Singleton / block multiple calls / make atomic b/c interacting with storage.
- */
-export const getPairData = async(options?: any): Promise<t.Pairs> => {
-  const _defaultOpts = {
-    ignorePersisted: false,
-    persist: true
-  }
-  const _options = {..._defaultOpts, ...options}
-
-  let _storedObj: any = undefined
-  try {
-    if (!_options.ignorePersisted) {
-      _storedObj =  await p.retrieveObject(ALL_PAIRS_FILE)
-    }
-  } catch(ignoredError) {
-    log.warn(`Unable to retrieve stored swap data. Fetching from Graph Protocol.`)
-  }
-
-  let _allPairs: t.Pairs | undefined = undefined
-  if (_storedObj && _storedObj.hasOwnProperty('object')) {
-    _allPairs = new t.Pairs()
-    _allPairs.deserialize(_storedObj.object)
-  }
-
-  let _storedAgeLimitExceeded = false
-  if (_storedObj && _storedObj.hasOwnProperty('timeMs')) {
-    const _storedInterval = Interval.fromDateTimes(DateTime.fromMillis(_storedObj.timeMs),
-                                                   DateTime.now())
-    _storedAgeLimitExceeded = _storedInterval.length() > MAX_DATA_AGE.toMillis()
-  }
-
-  if (!_allPairs || _storedAgeLimitExceeded) {
-    _allPairs = await uniGraphV2.fetchAllRawPairsV2()
-
-    if (_options.persist) {
-      await p.storeObject(ALL_PAIRS_FILE, _allPairs.serialize())
-    }
-  }
-
-  return _allPairs
-}
-
-export const getTokenData = async(options?: any): Promise<t.Tokens> => {
-  const _defaultOpts = {
-    ignorePersisted: false,
-    persist: true
-  }
-  const _options = {..._defaultOpts, ...options}
-
-  let _storedObj: any = undefined
-  try {
-    if (!_options.ignorePersisted) {
-      _storedObj =  await p.retrieveObject(ALL_TOKENS_FILE)
-    }
-  } catch(ignoredError) {
-    log.warn(`Unable to retrieve stored token data. Fetching from Graph Protocol.`)
-  }
-
-  let _allTokens: t.Tokens | undefined = undefined
-  if (_storedObj && _storedObj.hasOwnProperty('object')) {
-    _allTokens = new t.Tokens()
-    _allTokens.deserialize(_storedObj.object)
-  }
-
-  let _storedAgeLimitExceeded = false
-  if (_storedObj && _storedObj.hasOwnProperty('timeMs')) {
-    const _storedInterval = Interval.fromDateTimes(DateTime.fromMillis(_storedObj.timeMs),
-                                                   DateTime.now())
-    _storedAgeLimitExceeded = _storedInterval.length() > MAX_DATA_AGE.toMillis()
-  }
-
-  if (!_allTokens || _storedAgeLimitExceeded) {
-    _allTokens = await uniGraphV2.fetchAllTokensV2()
-
-    if (_options.persist) {
-      await p.storeObject(ALL_TOKENS_FILE, _allTokens.serialize())
-    }
-  }
-
-  return _allTokens
-}
-
-export const constructPairGraph = async(allPairData: t.Pairs): Promise<t.PairGraph> =>
-{
-  const _g: t.PairGraph = new graphlib.Graph({directed: false,
-                                              multigraph: false,   // Explain optimization here (attach array of pair ids for traversal speed)
-                                              compound: false})
-  
-  let maxEdges = 1
-  let maxEdgePair = ''
-  for (const pairId of allPairData.getPairIds()) {
-    const pair = allPairData.getPair(pairId)
-    const { token0, token1 } = pair
-    let edges = _g.edge(token0.id, token1.id)
-
-    // Duplicate edges were only happening when graph vertices are symbols. There
-    // are no duplicate pairs connecting by token IDs:
-    if (edges) {
-      log.warn(`Existing Edge Found:\n` +
-               `${token0.id} (${token0.symbol}) <---> ${token1.id} (${token1.symbol})`)
-
-      edges = {
-        pairIds: [...edges.pairIds, pairId]
-      }
-
-      if (edges.pairIds.length > maxEdges) {
-        maxEdges = edges.pairIds.length
-        maxEdgePair = `${token0.id} (${token0.symbol}) <---> ${token1.id} (${token1.symbol})`
-      }
-    } else {
-      edges = {
-        pairIds: [pairId]
-      }
-    }
-    _g.setEdge(token0.id, token1.id, edges)   // <-- pairID set for label and edge
-                                              // !!! Needed for multigraph
-  }
-
-  const edges = _g.edges()
-  const numRawEdges = edges.length
-  let numMappedEdges = 0
-  for (const edge of edges) {
-    numMappedEdges += _g.edge(edge).pairIds.length
-  }
-  log.info(`Constructed graph containing:\n` +
-           `    ${_g.nodes().length} tokens\n` +
-           `    ${numRawEdges} edges\n` +
-           `    ${numMappedEdges} pairs\n` +
-           `    ${maxEdgePair} (${maxEdges} connecting edges)\n`)
-
-  await p.storeObject('Graph_Data.json', _g)
-  return _g
-}
-
-const routeSearch = (g: t.PairGraph, 
+const _routeSearch = (g: t.PairGraph, 
                      hops: number, 
                      constraints: t.Constraints,
                      route: any, 
-                     rolledRoutes: any, 
+                     rolledRoutes: t.VFStackedRoutes, 
                      originAddr: string, 
                      destAddr: string): void => 
 {
@@ -207,7 +45,7 @@ const routeSearch = (g: t.PairGraph,
       }
 
       if (originAddr !== neighbor) {
-        routeSearch(g, hops, constraints, _route, rolledRoutes, neighbor, destAddr)
+        _routeSearch(g, hops, constraints, _route, rolledRoutes, neighbor, destAddr)
       }
     }
   }
@@ -217,8 +55,10 @@ export const findRoutes = async(pairGraph: t.PairGraph,
                                 srcAddr: string,
                                 dstAddr: string,
                                 constraints?: t.Constraints,
-                                verbose?: boolean): Promise<any> =>
+                                verbose?: boolean): Promise<t.VFStackedRoutes> =>
 {
+  let rolledRoutes: t.VFStackedRoutes= []
+
   const _defaultConstrs: t.Constraints = {
     maxDistance: 2
   }
@@ -227,7 +67,7 @@ export const findRoutes = async(pairGraph: t.PairGraph,
   if (!srcAddr || !dstAddr) {
     log.error(`A source token address(${srcAddr}) and destination token ` +
               `address(${dstAddr}) are required.`)
-    return
+    return rolledRoutes
   }
   const _srcAddrLC = srcAddr.toLowerCase()
   const _dstAddrLC = dstAddr.toLowerCase()
@@ -238,20 +78,20 @@ export const findRoutes = async(pairGraph: t.PairGraph,
 
   if (!pairGraph.hasNode(_srcAddrLC)) {
     log.error(`Source token address, ${srcAddr}, is not in the graph.`)
-    return
+    return rolledRoutes
   }
   if (!pairGraph.hasNode(_dstAddrLC)) {
     log.error(`Destination token address, ${dstAddr}, is not in the graph.`)
-    return
+    return rolledRoutes
   }
 
   if (_constraints.ignoreTokenIds && _constraints.ignoreTokenIds.includes(_srcAddrLC)) {
     log.error(`Source token address, ${srcAddr}, is constrained out of the route search.`)
-    return
+    return rolledRoutes
   }
   if (_constraints.ignoreTokenIds && _constraints.ignoreTokenIds.includes(_srcAddrLC)) {
     log.error(`Destination token address, ${dstAddr}, is constrained out of the route search.`)
-    return
+    return rolledRoutes
   }
 
   if (verbose) {
@@ -260,8 +100,7 @@ export const findRoutes = async(pairGraph: t.PairGraph,
 
   let hops = 0
   let route: any = []
-  let rolledRoutes: any = []
-  routeSearch(pairGraph, hops, _constraints, route, rolledRoutes, _srcAddrLC, _dstAddrLC)
+  _routeSearch(pairGraph, hops, _constraints, route, rolledRoutes, _srcAddrLC, _dstAddrLC)
 
   rolledRoutes.sort((a: any, b:any) => {
     return a.length - b.length    // Ascending order by route length
@@ -270,7 +109,7 @@ export const findRoutes = async(pairGraph: t.PairGraph,
   return rolledRoutes
 }
 
-export const routesToString = (rolledRoutes: any, tokenData: t.Tokens): string => 
+export const routesToString = (rolledRoutes: t.VFStackedRoutes, tokenData: t.Tokens): string => 
 {
   let _routeStr: string = '\n'
 
@@ -297,6 +136,229 @@ export const routesToString = (rolledRoutes: any, tokenData: t.Tokens): string =
   return _routeStr
 }
 
+export const unstackRoutes = (stackedRoutes: t.VFStackedRoutes): t.VFRoutes =>
+{
+  let routes: t.VFRoutes= []
+
+  for (const stackedRoute of stackedRoutes) {
+    // Unstack the route by determining the number of pairs in each segment and
+    // then constructing all possible routes implied by the stacked pairs of each
+    // segment. For example considering the following stacked route:
+    //
+    //   src --> segment1 --> segment2 --> dst
+    //              p1           p2
+    //                           p3
+    //
+    // The algorithm herein 'unstacks' this route creating two routes, implied
+    // by the stacked pairs:
+    //
+    //  src --> p1 --> p2 --> dst
+    //
+    //  src --> p1 --> p3 --> dst
+    //
+    const segmentPairCounts: number[] = []    // Count of number of pairs in each segment.
+    const segmentPairIndices: number[] = []   // Indices to be used in the conversion described 
+                                              // in the comment above.
+    for (let idx = 0; idx < stackedRoute.length; idx++) {
+      segmentPairCounts[idx] = stackedRoute[idx].pairIds.length
+      segmentPairIndices[idx] = 0
+    }
+
+    while (segmentPairIndices[segmentPairIndices.length-1] < segmentPairCounts[segmentPairCounts.length-1]) {
+      const route: t.VFRoute = []
+      for (let segIdx = 0; segIdx < stackedRoute.length; segIdx++) {
+        const stackedSegment = stackedRoute[segIdx]
+        const pairIndex = segmentPairIndices[segIdx]
+        const pairId = stackedSegment.pairIds[pairIndex]
+
+        const segment: t.VFSegment = {
+          src: stackedSegment.src,
+          dst: stackedSegment.dst,
+          pairId
+        }
+
+        route.push(segment)
+      }
+
+      routes.push(route)
+
+      // Ingrement the pair indices for the segments.  (Basically a counter that counts to the number of
+      // pairs for each segment, then incrementing the pair index of the next segment when the number of
+      // pairs for the previous segment is reached.):
+      //
+      for (let segIdx = 0; segIdx < stackedRoute.length; segIdx++) {
+        segmentPairIndices[segIdx]++
+        if ((segmentPairIndices[segIdx] < segmentPairCounts[segIdx]) || (segIdx === stackedRoute.length - 1)) {
+          break
+        } else {
+          segmentPairIndices[segIdx] = 0
+        }
+      }
+    }
+  }
+  
+  return routes
+}
+
+export const costRoutes = (allPairData: t.Pairs,
+                           tokenData: t.Tokens,
+                           routes: t.VFRoutes,
+                           amount: number,
+                           maxImpact:number = 10.0): t.VFRoutes =>
+{
+  const costedRoutes: t.VFRoutes = []
+
+  let inputAmount = amount.toString()
+  // Convert the specified double that is maxImpact to a fractional value with reasonable
+  // precision:
+  const maxImpactFrac = new Fraction(JSBI.BigInt(Math.floor(maxImpact * 1e18)), JSBI.BigInt(1e18))
+
+  for (const route of routes) {
+    let exceededImpact = false
+    let failedRoute = false
+
+    for (const segment of route) {
+      const pairData = allPairData.getPair(segment.pairId)
+      let estimate: any = undefined
+      try {
+        estimate = computeTradeEstimates(pairData, tokenData, segment.src, inputAmount)
+      } catch (ignoredError) {
+        // log.warn(`Failed computing impact estimates for ${segment.src} --> ${segment.dst}:\n` +
+        //          `${JSON.stringify(pairData, null, 2)}\n` +
+        //          ignoredError)
+        failedRoute = true
+        break
+      }
+      
+      // TODO: see why this next line is not working, for now, though parseFloat workaround:
+      // if (estimate.trade.priceImpact.greaterThan(maxImpactFrac)) {
+      if (parseFloat(estimate.trade.priceImpact.toSignificant(18)) > maxImpact) {
+        exceededImpact = true
+        break
+      }
+
+      // TODO: optimization - compute the cumulative impact and if that exceeds
+      //       maxImpactFrac, then break.
+
+      // Two different types at play here--Big & Currency (Currency is Big wrapped with decimal info for a token).
+      // See more here:
+      //    - https://github.com/Uniswap/uniswap-sdk-core/tree/main/src/entities/fractions
+      //    - specifically fraction.ts and currencyAmount.ts
+      //
+      segment.impact = estimate.trade.priceImpact.toSignificant(18)
+      segment.srcAmount = estimate.trade.inputAmount.toExact()
+      segment.dstAmount = estimate.trade.outputAmount.toExact()
+
+      // TODOs: 
+      //       1. This is ugly and will lose precision, we need to either complete the TODO on the
+      //       computeTradeEstimates method (estimate entire routes), or find an alternate solution
+      //       to prevent precision loss.
+      //
+      //       2. Check assumption that slippage is multiplied into outputAmount (may need to use
+      //          other methods in Uni API / JSBI etc.)
+      //
+      inputAmount = estimate.trade.outputAmount.toExact()
+    }
+
+    if (failedRoute) {
+      // log.debug(`Route failed in estimation, not adding:\n${JSON.stringify(route, null, 2)}`)
+      continue
+    }
+
+    if (exceededImpact) {
+      // log.debug(`Route exceeded impact, not adding:\n${JSON.stringify(route, null, 2)}`)
+      continue
+    }
+
+    costedRoutes.push(route)
+  }
+
+  return costedRoutes
+}
+
+export const convertRoutesToLegacyFmt = (allPairData: t.Pairs, tokenData: t.Tokens, routes: t.VFRoutes): any => {
+  const legacyRoutesFmt: any = []
+  for (const route of routes) {
+    let remainingImpactPercent = 1
+    const numSwaps = route.length
+    let routeStr = ''
+    let routeIdStr = ''
+    let srcData: any = {}
+    let dstData: any = {}
+    let amountIn: string | undefined = ''
+    let amountOut: string | undefined = ''
+    const orderedSwaps = []
+
+    for (let segIdx = 0; segIdx < route.length; segIdx++) {
+      const segment = route[segIdx]
+
+      const pairData = allPairData.getPair(segment.pairId)
+      const { token0, token1 } = pairData
+
+      const swap: any = {
+        src: segment.src,
+        dst: segment.dst,
+        id: segment.pairId,
+        impact: segment.impact,
+        amountIn: segment.srcAmount,
+        amountOut: segment.dstAmount,
+        token0,
+        token1
+      }
+
+      orderedSwaps.push(swap)
+
+      if (segment.impact !== undefined) {
+        remainingImpactPercent = remainingImpactPercent * (1 - parseFloat(segment.impact)/100)
+      }
+
+      if (segIdx === 0) {
+        routeStr += `${tokenData.getSymbol(segment.src)} > ${tokenData.getSymbol(segment.dst)}`
+        routeIdStr += `${segment.src} > ${segment.dst}`
+      } else {
+        routeStr += ` > ${tokenData.getSymbol(segment.dst)}`
+        routeIdStr += ` > ${segment.dst}`
+      }
+
+      if (segIdx === 0) {
+        srcData = tokenData.getToken(segment.src)
+        amountIn = segment.srcAmount
+      }
+      if (segIdx === route.length - 1) {
+        dstData = tokenData.getToken(segment.dst)
+        amountOut = segment.dstAmount
+      }
+    }
+    
+    const legacyRoute: any = {
+      totalImpact: (1 - remainingImpactPercent) * 100,
+      numSwaps,
+      routeStr,
+      routeIdStr,
+      srcData,
+      dstData,
+      orderedSwaps
+    }
+
+    legacyRoutesFmt.push(legacyRoute)
+  }
+
+  return legacyRoutesFmt
+}
+
+/**
+ *  TODO TODO TODO:
+ * 
+ *    1. This method should take advantage of complete routes
+ *       to ensure that precision is not lost beyond 18 decimals
+ *       instead of being called for a single route segment at a time.
+ *        - the toExact method means we might be able to construct a
+ *          trade (if another method exists) where we specify the last
+ *          input.
+ * 
+ *    2. If 1 is not yet completed, a more resolute way of passing in
+ *       an input value is desireable.
+ */
 const computeTradeEstimates = (pairData: t.Pair, 
                                tokenData: t.Tokens,
                                srcAddrLC:string,
@@ -304,58 +366,53 @@ const computeTradeEstimates = (pairData: t.Pair,
 {
   // 1. Get token0 & token1 decimals
   //
-  const _token0Data = tokenData.getToken(pairData.token0.id)
-  const _token1Data = tokenData.getToken(pairData.token1.id)
-  if (!_token0Data) {
+  const token0 = tokenData.getToken(pairData.token0.id)
+  const token1 = tokenData.getToken(pairData.token1.id)
+  if (!token0) {
     throw new Error(`Unable to find token data for token id ${pairData.token0.id}.`)
   }
-  if (!_token1Data) {
+  if (!token1) {
     throw new Error(`Unable to find token data for token id ${pairData.token1.id}.`)
   }
-  const _token0Decimals = parseInt(_token0Data.decimals)
-  const _token1Decimals = parseInt(_token1Data.decimals)
-
-  // 2 Get normalized reserves (i.e. shift them both to have no decimal
-  //     places but be aligned):
-  //
-  const { normReserve0, normReserve1 } =
-    n.getNormalizedIntReserves(pairData.reserve0, pairData.reserve1)
+  const token0Decimals = parseInt(token0.decimals)
+  const token1Decimals = parseInt(token1.decimals)
 
   // 2. Construct token objects (except WETH special case)
   //
-  const _token0 = (_token0Data.symbol === 'WETH') ?
+  const token0UniObj = (token0.symbol === 'WETH') ?
     WETH[ChainId.MAINNET] :
     new Token(ChainId.MAINNET,
-              getAddress(_token0Data.id),   // Use Ethers to get checksummed address
-              _token0Decimals,
-              _token0Data.symbol,
-              _token0Data.name)
+              getAddress(token0.id),   // Use Ethers to get checksummed address
+              token0Decimals,
+              token0.symbol,
+              token0.name)
 
-  const _token1 = (_token1Data.symbol === 'WETH') ?
+  const token1UniObj = (token1.symbol === 'WETH') ?
     WETH[ChainId.MAINNET] :
     new Token(ChainId.MAINNET,
-              getAddress(_token1Data.id),   // Use Ethers to get checksummed address
-              _token1Decimals,
-              _token1Data.symbol,
-              _token1Data.name)
+              getAddress(token1.id),   // Use Ethers to get checksummed address
+              token1Decimals,
+              token1.symbol,
+              token1.name)
 
-  // 3. Construct pair object after moving amounts correct number of
+  // 4. Construct pair object after moving amounts correct number of
   //    decimal places (lookup from tokens in graph)
   //
-  const _pair = new Pair( new TokenAmount(_token0, normReserve0),
-                          new TokenAmount(_token1, normReserve1) )
+  const reserve0IntStr = getIntegerString(pairData.reserve0, token0Decimals)
+  const reserve1IntStr = getIntegerString(pairData.reserve1, token1Decimals)
+  const _pair = new Pair( new TokenAmount(token0UniObj, reserve0IntStr),
+                          new TokenAmount(token1UniObj, reserve1IntStr) )
 
   // 5. Construct the route & trade objects to determine the price impact.
   //
-  const _srcToken = (srcAddrLC === _token0Data.id) ?
-      { obj: _token0, decimals: _token0Decimals } :
-      { obj: _token1, decimals: _token1Decimals }
+  const _srcToken = (srcAddrLC === token0.id) ?
+      { obj: token0UniObj, decimals: token0Decimals } :
+      { obj: token1UniObj, decimals: token1Decimals }
 
   const _route = new Route([_pair], _srcToken.obj)
-  const _trade = new Trade(_route,
-                            new TokenAmount(_srcToken.obj, 
-                                            n.getNormalizedValue(amount, _srcToken.decimals)),
-                            TradeType.EXACT_INPUT)
+  const _tradeAmount = new TokenAmount(_srcToken.obj, getIntegerString(amount, _srcToken.decimals))
+  const _trade = new Trade(_route, _tradeAmount, TradeType.EXACT_INPUT)
+  
   return {
     route: _route,
     trade: _trade
@@ -551,7 +608,7 @@ export const costRolledRoutes = (allPairData: t.Pairs,
         if (_pairData) {
           try {
             const est = computeTradeEstimates(_pairData, tokenData, _srcAddr, amount)
-            const impact = est.trade.priceImpact.toSignificant(3)
+            const impact = est.trade.priceImpact.toSignificant(6)
             _costedSegment.pairs.push({
               id: _pairId,
               impact,

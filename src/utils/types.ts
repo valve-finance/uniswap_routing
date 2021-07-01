@@ -1,5 +1,4 @@
-import log from "loglevel";
-import internal from "stream";
+// import { TokenAmount } from '@uniswap/sdk'
 
 /*
  * Types related to the Uniswap V2 Sub-graph Pairs modelled with access in O(log(n))
@@ -135,15 +134,29 @@ export class Tokens {
  * 
  * VF -> Valve Finance
  * 
- * RolledRoutes:
+ * StackedRoutes (formerly RolledRoutes):
  */
-export interface VFSegmentPairs {
+export interface VFStackedSegment {
   src: string;
   dst: string;
   pairIds: string[];
 }
-export type VFRouteSegments = VFSegmentPairs[]
-export type VFRolledRoutes = VFRouteSegments[]
+export type VFStackedRoute = VFStackedSegment[]
+export type VFStackedRoutes = VFStackedRoute[]
+
+/*
+ *  UnstackedRoute (i.e. regular route with 1 pair per segment)
+ */
+export interface VFSegment {
+  src: string;
+  dst: string;
+  pairId: string;
+  impact?: string;
+  srcAmount?: string;
+  dstAmount?: string;
+}
+export type VFRoute = VFSegment[]
+export type VFRoutes = VFRoute[]
 
 /*
  * CostedRolledRoutes:

@@ -1,12 +1,13 @@
 import * as ds from './../utils/debugScopes'
 import * as t from './../utils/types'
 import * as c from './../utils/constants'
-import * as cmds from './../commands'
+import * as r from './../utils/routing'
+import { initUniData } from '../utils/data'
 
 const log = ds.getLog('test')
 
 export const test = async(): Promise<void> => {
-  const _uniData: t.UniData = await cmds.initUniData()
+  const _uniData: t.UniData = await initUniData()
 
   // From: https://github.com/Uniswap/uniswap-interface/blob/03913d9c0b5124b95cff34bf2e80330b7fd8bcc1/src/constants/index.ts
   //
@@ -17,19 +18,19 @@ export const test = async(): Promise<void> => {
   //
   log.info('Unconstrained Route ...')
   let _startMs = Date.now()
-  let _routes: any = await cmds.findRoutes(_uniData.pairGraph, addrSrc, addrDst)
+  let _routes: any = await r.findRoutes(_uniData.pairGraph, addrSrc, addrDst)
   log.info(`Computed in ${(Date.now()-_startMs)} ms.`)
 
-  let  _routeStr = cmds.routesToString(_routes, _uniData.tokenData)
+  let  _routeStr = r.routesToString(_routes, _uniData.tokenData)
   log.info(_routeStr)
  
   // Test constrained version
   log.info('Constrained Route ...')
   _startMs = Date.now()
-  _routes = await cmds.findRoutes(_uniData.pairGraph, addrSrc, addrDst, c.noHubTokenCnstr)
+  _routes = await r.findRoutes(_uniData.pairGraph, addrSrc, addrDst, c.noHubTokenCnstr)
   log.info(`Computed in ${(Date.now()-_startMs)} ms.`)
 
-  _routeStr = cmds.routesToString(_routes, _uniData.tokenData)
+  _routeStr = r.routesToString(_routes, _uniData.tokenData)
   log.info(_routeStr)
 
   process.exit(0)
