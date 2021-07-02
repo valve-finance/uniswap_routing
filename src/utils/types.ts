@@ -10,6 +10,17 @@ export interface PairToken {
   symbol: string;
 }
 
+export interface PairLite {
+  id: string;
+  reserve0: string;
+  reserve1: string;
+  reserveUSD: string;
+  token0Price: string;
+  token1Price: string;
+  updatedMs?: number;
+  updatedBlock?: number;
+}
+
 export interface Pair {
   id: string;
   reserve0: string;
@@ -19,6 +30,8 @@ export interface Pair {
   token0Price: string;
   token1: PairToken;
   token1Price: string;
+  updatedMs?: number;
+  updatedBlock?: number;
 }
 
 export interface PairDict { [index: string]: Pair }
@@ -52,6 +65,24 @@ export class Pairs {
 
   public getPair(id: string): Pair {
     return this._pairs[id]
+  }
+
+  // TODO: remove this and move to cache w/ TTL
+  public updatePairs(updatedPairs: PairLite[], updateTimeMs: number): void {
+    for (const updatedPair of updatedPairs) {
+      const pair = this._pairs[updatedPair.id]
+      if (pair) {
+        pair.reserve0 = updatedPair.reserve0
+        pair.reserve1 = updatedPair.reserve1
+        pair.reserveUSD = updatedPair.reserveUSD
+        pair.token0Price = updatedPair.token0Price
+        pair.token1Price = updatedPair.token1Price
+
+        if (updateTimeMs) {
+          pair.updatedMs = updateTimeMs
+        }
+      }
+    }
   }
 
   public getPairIds(): string[] {

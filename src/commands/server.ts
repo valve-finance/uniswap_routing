@@ -151,13 +151,13 @@ export const server = async(port: string): Promise<void> => {
                                                                        constraints)
 
           const _routes: t.VFRoutes = r.unstackRoutes(_stackedRoutes)
-          // log.debug(`All routes:\n${JSON.stringify(_routes, null, 2)}`)
+          log.debug(`All routes:\n${JSON.stringify(_routes, null, 2)}`)
 
-          const _costedRoutes: t.VFRoutes = r.costRoutes(_uniData.pairData,
-                                                         _uniData.tokenData,
-                                                         _routes,
-                                                         amount,
-                                                         _options.max_impact.value)
+          const _costedRoutes: t.VFRoutes = await r.costRoutes(_uniData.pairData,
+                                                               _uniData.tokenData,
+                                                               _routes,
+                                                               amount,
+                                                               _options.max_impact.value)
           // log.debug(`Costed routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
           
           const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(_uniData.pairData,

@@ -97,10 +97,10 @@ export const shell = async(): Promise<void> => {
 
           const _routes = r.unstackRoutes(_stackedRoutes)
 
-          const _costedRoutes = r.costRoutes(_uniData.pairData,
-                                             _uniData.tokenData,
-                                             _routes, _amtPayToken,
-                                             _settings['maxImpact'].value)
+          const _costedRoutes = await r.costRoutes(_uniData.pairData,
+                                                   _uniData.tokenData,
+                                                   _routes, _amtPayToken,
+                                                   _settings['maxImpact'].value)
           // log.info(`Routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
           
           const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(_uniData.pairData,

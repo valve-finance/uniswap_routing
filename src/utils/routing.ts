@@ -1,5 +1,6 @@
 import * as ds from './debugScopes'
 import * as t from './types'
+import { getUpdatedPairData } from './../graphProtocol/uniswapV2'
 import { getIntegerString  } from './misc'
 import { ChainId,
          Token,
@@ -200,17 +201,34 @@ export const unstackRoutes = (stackedRoutes: t.VFStackedRoutes): t.VFRoutes =>
   return routes
 }
 
-export const costRoutes = (allPairData: t.Pairs,
-                           tokenData: t.Tokens,
-                           routes: t.VFRoutes,
-                           amount: number,
-                           maxImpact:number = 10.0): t.VFRoutes =>
+export const costRoutes = async (allPairData: t.Pairs,
+                                 tokenData: t.Tokens,
+                                 routes: t.VFRoutes,
+                                 amount: number,
+                                 maxImpact:number = 10.0,
+                                 updatePairData:boolean = true): Promise<t.VFRoutes> =>
 {
   const costedRoutes: t.VFRoutes = []
 
   // Convert the specified double that is maxImpact to a fractional value with reasonable
   // precision:
   const maxImpactFrac = new Fraction(JSBI.BigInt(Math.floor(maxImpact * 1e18)), JSBI.BigInt(1e18))
+
+  /* TODO:
+   *  - expand and extend this into a proper TTL based cache in Redis or other.
+   *  - examine this for higher performance opportunity
+   * 
+   * For now, aggregate the pairIds in the route and fetch their current stats
+   * in aggregate.  TODO: add the block id to the lookup and put it in the 
+   *                      updatedBlock.
+   * 
+   */
+  const start: number = Date.now()
+  const pairIdsToUpdate: Set<string> = getAllPairsIdsOfAge(allPairData, routes)
+  const updateTimeMs = Date.now()
+  const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
+  allPairData.updatePairs(updatedPairs, updateTimeMs)
+  log.debug(`Finished updating ${pairIdsToUpdate.size} pairs in ${Date.now() - start} ms`)
 
   for (const route of routes) {
     let inputAmount = amount.toString()
@@ -419,4 +437,29 @@ const computeTradeEstimates = (pairData: t.Pair,
     route: _route,
     trade: _trade
   }
+}
+
+export const getAllPairsIdsOfAge = (allPairData: t.Pairs,
+                                    routes: t.VFRoutes,
+                                    ageMs: number = 15000): Set<string> =>
+{
+  const now = Date.now()
+
+  const pairIds = new Set<string>()
+  for (const route of routes) {
+    for (const segment of route) {
+
+      // Don't add the segment if it's been updated within ageMs
+      const pairData = allPairData.getPair(segment.pairId)
+      if (pairData &&
+          pairData.updatedMs &&
+          (now - pairData.updatedMs < ageMs)) {
+          continue
+      }
+
+      pairIds.add(segment.pairId)
+    }
+  }
+
+  return pairIds
 }
