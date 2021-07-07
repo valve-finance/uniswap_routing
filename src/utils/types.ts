@@ -1,5 +1,7 @@
 // import { TokenAmount } from '@uniswap/sdk'
 
+import log from "loglevel"
+
 /*
  * Types related to the Uniswap V2 Sub-graph Pairs modelled with access in O(log(n))
  * time.
@@ -77,10 +79,9 @@ export class Pairs {
         pair.reserveUSD = updatedPair.reserveUSD
         pair.token0Price = updatedPair.token0Price
         pair.token1Price = updatedPair.token1Price
-
-        if (updateTimeMs) {
-          pair.updatedMs = updateTimeMs
-        }
+        pair.updatedMs = updateTimeMs
+      } else {
+        log.error(`updatePairs: ${updatedPair.id} pair not found!`)
       }
     }
   }

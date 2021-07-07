@@ -141,63 +141,85 @@ export const fetchAllRawPairsV2 = async(): Promise<t.Pairs> =>
   return allPairs 
 }
 
-export const getUpdatedPairData = async (pairIds: Set<string>,
-                                         missingDataRetries:number=5): Promise<t.PairLite[]> =>
+export const _getPairUpdate = async (pairIds: string[],
+                                     missingDataRetries: number = 5): Promise<t.PairLite[] | undefined> =>
 {
-  // TODO: extend > 1k if needed ...
-  // if (pairIds.size> 1000) {
-  //   throw new Error(`getUpdatedPairData only supports up to 1000 pairs at a time. `+
-  //                   `${pairIds.size} requested.`)
-  // }
-
-  const pairs: t.PairLite[] = []
-
-  let offset = 0
-  const pairIdArr: string[] = [...pairIds]
-  while (offset < pairIdArr.length) {
-    // Process in chunks of 1k
-    const pairIdSubArr = pairIdArr.slice(offset, offset + 1000)
-    offset += 1000
-
-    const payload = {
-      query: `{
-        pairs(where: {id_in: ["${pairIdSubArr.join('", "')}"]}) {
-          id,
-          reserve0,
-          reserve1,
-          reserveUSD
-          token0Price,
-          token1Price
-        }
-      }`,
-      variables: {}
+  // Probably faster to not do id_in below but build individual queries w/ equality (
+  // Postgres n^2 problem): (TODO change query and test)
+  const payload = {
+    query: `{
+      pairs(first: 1000
+            where: {id_in: ["${pairIds.join('", "')}"]}) {
+        id,
+        reserve0,
+        reserve1,
+        reserveUSD
+        token0Price,
+        token1Price
+      }
+    }`,
+    variables: {}
+  }
+  
+  let attempt = 0
+  let response: any = undefined
+  while (attempt < missingDataRetries) {
+    try {
+      attempt++
+      response = await rest.postWithRetry(config.uniswap_v2_graph_url, payload)
+    } catch(error) {
+      throw new Error('Failed to fetch data from Uniswap V2 Graph\n' + error)
     }
-    
-    let attempt = 0
-    let response: any = undefined
-    while (attempt < missingDataRetries) {
-      try {
-        attempt++
-        response = await rest.postWithRetry(config.uniswap_v2_graph_url, payload)
-      } catch(error) {
-        throw new Error('Failed to fetch data from Uniswap V2 Graph\n' + error)
-      }
 
-      if (response && response.data && response.data.pairs) {
-        pairs.push(...response.data.pairs)
-      } else {
-        const _responseStr = JSON.stringify(response)
-        const _responseStrShort = (_responseStr && _responseStr.length) ? 
-          _responseStr.substr(0, 1024) : _responseStr
-        log.warn(`Attempt ${attempt} of ${missingDataRetries}.`)
-        log.warn('Response from Uniswap V2 Graph does not contain property "data"\n' +
-                `  url: ${config.uniswap_v2_graph_url}\n` +
-                `  response: ${_responseStrShort}...\n` +
-                `  query: ${JSON.stringify(payload.query)}\n`)
-      }
+    if (response && response.data && response.data.pairs) {
+      return response.data.pairs
+    } else {
+      const _responseStr = JSON.stringify(response)
+      const _responseStrShort = (_responseStr && _responseStr.length) ? 
+        _responseStr.substr(0, 1024) : _responseStr
+      const _payloadQueryShort = `${JSON.stringify(payload.query).substr(0, 1024)} ...`
+      log.warn(`Attempt ${attempt} of ${missingDataRetries}.`)
+      log.warn('Response from Uniswap V2 Graph does not contain property "data"\n' +
+              `  url: ${config.uniswap_v2_graph_url}\n` +
+              `  response: ${_responseStrShort}...\n` +
+              `  query: ${_payloadQueryShort}\n`)
     }
   }
 
+  return undefined
+}
+
+export const getUpdatedPairData = async (pairIds: Set<string>,
+                                         missingDataRetries:number=5): Promise<t.PairLite[]> =>
+{
+  const pairs: t.PairLite[] = []
+
+  let offset = 0
+  let promises: Promise<t.PairLite[] | undefined>[] = []
+  const pairIdArr: string[] = [...pairIds]
+  while (offset < pairIdArr.length) {
+    // Process in chunks of 1k:
+    const pairIdSubArr = pairIdArr.slice(offset, offset + 1000)
+    offset += 1000
+
+    // log.debug(`getUpdatedPairData:  updating ${pairIdSubArr.length} / ${pairIds.size} pairs.`)
+    promises.push(_getPairUpdate(pairIdSubArr, missingDataRetries)
+                                 .catch((error) => {
+                                   log.warn(`ERROR in concurrent call to _getPairUpdate:\n${error}`)
+                                   return undefined
+                                 }))
+  }
+
+  const _pairsToMerge = await Promise.all(promises)
+  for (const _pair of _pairsToMerge) {
+    if (_pair) {
+      pairs.push(..._pair)
+    } else {
+      log.warn(`Failed to get data in one or more concurrent calls to _getPairUpdate. Ignoring.`)
+    }
+  }
+
+  // log.debug(`getUpdatedPairData:  returning ${pairs.length} updated pairs.`)
   return pairs 
 }
 

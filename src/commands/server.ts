@@ -144,16 +144,6 @@ export const server = async(port: string): Promise<void> => {
           result.error = sanitizeStr
           log.debug(sanitizeStr)
         } else {
-          // const constraints: t.Constraints = {
-          //   maxDistance: _options.max_hops.value
-          // }
-          // const _stackedRoutes: t.VFStackedRoutes = await r.findRoutes(_uniData.pairGraph,
-          //                                                              source,
-          //                                                              dest,
-          //                                                              constraints)
-
-          // const _routes: t.VFRoutes = r.unstackRoutes(_stackedRoutes)
-          // log.debug(`All routes:\n${JSON.stringify(_routes, null, 2)}`)
           const _routes = await _routeCache.getRoutes(source, dest)
 
           // TODO: consider pushing the filtering below into the routeCache

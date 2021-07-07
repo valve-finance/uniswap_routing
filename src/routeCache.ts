@@ -71,7 +71,7 @@ export class RouteCache {
       routesEntry = newRouteEntry
     }
 
-    log.debug(`getRoutes: returned ${routesEntry.routes.length} routes in ${Date.now()-start} ms`)
+    // log.debug(`getRoutes: returned ${routesEntry.routes.length} routes in ${Date.now()-start} ms`)
     return routesEntry.routes
   }
 

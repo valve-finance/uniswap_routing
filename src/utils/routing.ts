@@ -14,7 +14,7 @@ import { ChainId,
 import { getAddress } from '@ethersproject/address'
 import JSBI from 'jsbi'
 
-const log = ds.getLog('commands')
+const log = ds.getLog('routing')
 
 
 const _routeSearch = (g: t.PairGraph, 
@@ -205,10 +205,12 @@ export const costRoutes = async (allPairData: t.Pairs,
                                  tokenData: t.Tokens,
                                  routes: t.VFRoutes,
                                  amount: number,
-                                 maxImpact:number = 10.0,
-                                 updatePairData:boolean = true): Promise<t.VFRoutes> =>
+                                 maxImpact: number = 10.0,
+                                 updatePairData: boolean = true,
+                                 cacheEstimates: boolean = true): Promise<t.VFRoutes> =>
 {
   const costedRoutes: t.VFRoutes = []
+  const estimateCache: any = {}
 
   // Convert the specified double that is maxImpact to a fractional value with reasonable
   // precision:
@@ -223,12 +225,21 @@ export const costRoutes = async (allPairData: t.Pairs,
    *                      updatedBlock.
    * 
    */
-  const start: number = Date.now()
-  const pairIdsToUpdate: Set<string> = getAllPairsIdsOfAge(allPairData, routes)
-  const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
-  const updateTimeMs = Date.now()
-  allPairData.updatePairs(updatedPairs, updateTimeMs)
-  log.debug(`Finished updating ${pairIdsToUpdate.size} pairs in ${Date.now() - start} ms`)
+  if (updatePairData) {
+    const start: number = Date.now()
+    const pairIdsToUpdate: Set<string> = getAllPairsIdsOfAge(allPairData, routes)
+    const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
+    const updateTimeMs = Date.now()
+    allPairData.updatePairs(updatedPairs, updateTimeMs)
+    log.debug(`Finished updating ${pairIdsToUpdate.size} pairs in ${Date.now() - start} ms`)
+  }
+
+  const startCostMs: number = Date.now()
+  const estStats = {
+    hits: 0,
+    misses: 0,
+    entries: 0
+  }
 
   for (const route of routes) {
     let inputAmount = amount.toString()
@@ -239,7 +250,21 @@ export const costRoutes = async (allPairData: t.Pairs,
       const pairData = allPairData.getPair(segment.pairId)
       let estimate: any = undefined
       try {
-        estimate = computeTradeEstimates(pairData, tokenData, segment.src, inputAmount)
+        if (cacheEstimates) {
+          const estimateKey = `${inputAmount}-${segment.src}-${segment.pairId}`
+          estimate = estimateCache[estimateKey]
+          if (!estimate) {
+            estStats.misses++
+            estimate = computeTradeEstimates(pairData, tokenData, segment.src, inputAmount)
+            
+            estStats.entries++
+            estimateCache[estimateKey] = estimate
+          } else {
+            estStats.hits++
+          }
+        } else {
+          estimate = computeTradeEstimates(pairData, tokenData, segment.src, inputAmount)
+        }
       } catch (ignoredError) {
         // log.warn(`Failed computing impact estimates for ${segment.src} --> ${segment.dst}:\n` +
         //          `${JSON.stringify(pairData, null, 2)}\n` +
@@ -290,6 +315,15 @@ export const costRoutes = async (allPairData: t.Pairs,
 
     costedRoutes.push(route)
   }
+
+  // if (cacheEstimates) {
+  //   log.debug(`cacheEstimates ON:\n` +
+  //             `    ${routes.length} routes submitted for costing\n` +
+  //             `    ${costedRoutes.length} costed routes\n` +
+  //             `    ${JSON.stringify(estStats, null, 2)}\n\n`)
+  // }
+
+  log.debug(`costRoutes completed in ${Date.now() - startCostMs} ms.`)
 
   return costedRoutes
 }
@@ -442,7 +476,7 @@ const computeTradeEstimates = (pairData: t.Pair,
 const avgBlockMs = 15000
 export const getAllPairsIdsOfAge = (allPairData: t.Pairs,
                                     routes: t.VFRoutes,
-                                    ageMs: number = 4 * avgBlockMs): Set<string> =>
+                                    ageMs: number = 1 * avgBlockMs): Set<string> =>
 {
   const now = Date.now()
 
@@ -461,6 +495,8 @@ export const getAllPairsIdsOfAge = (allPairData: t.Pairs,
       pairIds.add(segment.pairId)
     }
   }
+
+  // log.debug(`getAllPairsIdsOfAge: returning ${pairIds.size} older than ${ageMs} ms.`)
 
   return pairIds
 }
