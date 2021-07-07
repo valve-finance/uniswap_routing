@@ -225,8 +225,8 @@ export const costRoutes = async (allPairData: t.Pairs,
    */
   const start: number = Date.now()
   const pairIdsToUpdate: Set<string> = getAllPairsIdsOfAge(allPairData, routes)
-  const updateTimeMs = Date.now()
   const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
+  const updateTimeMs = Date.now()
   allPairData.updatePairs(updatedPairs, updateTimeMs)
   log.debug(`Finished updating ${pairIdsToUpdate.size} pairs in ${Date.now() - start} ms`)
 
@@ -439,9 +439,10 @@ const computeTradeEstimates = (pairData: t.Pair,
   }
 }
 
+const avgBlockMs = 15000
 export const getAllPairsIdsOfAge = (allPairData: t.Pairs,
                                     routes: t.VFRoutes,
-                                    ageMs: number = 15000): Set<string> =>
+                                    ageMs: number = 4 * avgBlockMs): Set<string> =>
 {
   const now = Date.now()
 
@@ -453,7 +454,7 @@ export const getAllPairsIdsOfAge = (allPairData: t.Pairs,
       const pairData = allPairData.getPair(segment.pairId)
       if (pairData &&
           pairData.updatedMs &&
-          (now - pairData.updatedMs < ageMs)) {
+          ((now - pairData.updatedMs) < ageMs)) {
           continue
       }
 

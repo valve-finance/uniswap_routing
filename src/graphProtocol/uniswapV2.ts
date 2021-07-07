@@ -145,57 +145,60 @@ export const getUpdatedPairData = async (pairIds: Set<string>,
                                          missingDataRetries:number=5): Promise<t.PairLite[]> =>
 {
   // TODO: extend > 1k if needed ...
-  if (pairIds.size> 1000) {
-    throw new Error(`getUpdatedPairData only supports up to 1000 pairs at a time. `+
-                    `${pairIds.size} requested.`)
-  }
+  // if (pairIds.size> 1000) {
+  //   throw new Error(`getUpdatedPairData only supports up to 1000 pairs at a time. `+
+  //                   `${pairIds.size} requested.`)
+  // }
 
-  const pairIdArr: string[] = [...pairIds]
   const pairs: t.PairLite[] = []
 
-  const payload = {
-    query: `{
-      pairs(where: {id_in: ["${pairIdArr.join('", "')}"]}) {
-        id,
-        reserve0,
-        reserve1,
-        reserveUSD
-        token0Price,
-        token1Price
-      }
-    }`,
-    variables: {}
-  }
-  
-  let attempt = 0
-  let response: any = undefined
-  while (attempt < missingDataRetries) {
-    try {
-      attempt++
-      response = await rest.postWithRetry(config.uniswap_v2_graph_url, payload)
-    } catch(error) {
-      throw new Error('Failed to fetch data from Uniswap V2 Graph\n' + error)
-    }
+  let offset = 0
+  const pairIdArr: string[] = [...pairIds]
+  while (offset < pairIdArr.length) {
+    // Process in chunks of 1k
+    const pairIdSubArr = pairIdArr.slice(offset, offset + 1000)
+    offset += 1000
 
-    if (response && response.data && response.data.pairs) {
-      pairs.push(...response.data.pairs)
-    } else {
-      const _responseStr = JSON.stringify(response)
-      const _responseStrShort = (_responseStr && _responseStr.length) ? 
-        _responseStr.substr(0, 1024) : _responseStr
-      log.warn(`Attempt ${attempt} of ${missingDataRetries}.`)
-      log.warn('Response from Uniswap V2 Graph does not contain property "data"\n' +
-              `  url: ${config.uniswap_v2_graph_url}\n` +
-              `  response: ${_responseStrShort}...\n` +
-              `  query: ${JSON.stringify(payload.query)}\n`)
+    const payload = {
+      query: `{
+        pairs(where: {id_in: ["${pairIdSubArr.join('", "')}"]}) {
+          id,
+          reserve0,
+          reserve1,
+          reserveUSD
+          token0Price,
+          token1Price
+        }
+      }`,
+      variables: {}
+    }
+    
+    let attempt = 0
+    let response: any = undefined
+    while (attempt < missingDataRetries) {
+      try {
+        attempt++
+        response = await rest.postWithRetry(config.uniswap_v2_graph_url, payload)
+      } catch(error) {
+        throw new Error('Failed to fetch data from Uniswap V2 Graph\n' + error)
+      }
+
+      if (response && response.data && response.data.pairs) {
+        pairs.push(...response.data.pairs)
+      } else {
+        const _responseStr = JSON.stringify(response)
+        const _responseStrShort = (_responseStr && _responseStr.length) ? 
+          _responseStr.substr(0, 1024) : _responseStr
+        log.warn(`Attempt ${attempt} of ${missingDataRetries}.`)
+        log.warn('Response from Uniswap V2 Graph does not contain property "data"\n' +
+                `  url: ${config.uniswap_v2_graph_url}\n` +
+                `  response: ${_responseStrShort}...\n` +
+                `  query: ${JSON.stringify(payload.query)}\n`)
+      }
     }
   }
 
   return pairs 
-
-
-
-  return pairs
 }
 
 // TODO: refactor and combine w/ getRawPairsV2

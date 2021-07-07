@@ -3,6 +3,7 @@ import * as t from './../utils/types'
 import { sanitizeProperty, sanitizePropertyType } from '../utils/misc'
 import * as r from './../utils/routing'
 import { initUniData } from '../utils/data'
+import { RouteCache } from '../routeCache'
 
 import express from 'express'
 import http from 'http'
@@ -31,6 +32,7 @@ export const server = async(port: string): Promise<void> => {
     }
   }
   let _uniData: t.UniData = await initUniData()
+  let _routeCache = new RouteCache(_uniData.pairGraph)
 
   const app = express()
   app.set('trust proxy', true)
@@ -142,20 +144,29 @@ export const server = async(port: string): Promise<void> => {
           result.error = sanitizeStr
           log.debug(sanitizeStr)
         } else {
-          const constraints: t.Constraints = {
-            maxDistance: _options.max_hops.value
-          }
-          const _stackedRoutes: t.VFStackedRoutes = await r.findRoutes(_uniData.pairGraph,
-                                                                       source,
-                                                                       dest,
-                                                                       constraints)
+          // const constraints: t.Constraints = {
+          //   maxDistance: _options.max_hops.value
+          // }
+          // const _stackedRoutes: t.VFStackedRoutes = await r.findRoutes(_uniData.pairGraph,
+          //                                                              source,
+          //                                                              dest,
+          //                                                              constraints)
 
-          const _routes: t.VFRoutes = r.unstackRoutes(_stackedRoutes)
-          log.debug(`All routes:\n${JSON.stringify(_routes, null, 2)}`)
+          // const _routes: t.VFRoutes = r.unstackRoutes(_stackedRoutes)
+          // log.debug(`All routes:\n${JSON.stringify(_routes, null, 2)}`)
+          const _routes = await _routeCache.getRoutes(source, dest)
+
+          // TODO: consider pushing the filtering below into the routeCache
+          const _filteredRoutes: t.VFRoutes = []
+          for (const _route of _routes) {
+            if (_route.length <= _options.max_hops.value) {
+              _filteredRoutes.push(_route)
+            }
+          }
 
           const _costedRoutes: t.VFRoutes = await r.costRoutes(_uniData.pairData,
                                                                _uniData.tokenData,
-                                                               _routes,
+                                                               _filteredRoutes,
                                                                amount,
                                                                _options.max_impact.value)
           // log.debug(`Costed routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
