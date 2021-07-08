@@ -52,6 +52,9 @@ const _routeSearch = (g: t.PairGraph,
   }
 }
 
+const _WETH_ADDRS_LC = [ "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",   // The legit one w/ most txns
+                         "0xd73d6d4c463df976399acd80ea338384e247c64b",
+                         "0x477b466750c31c890db3208816d60c8585be7f0e" ]
 export const findRoutes = async(pairGraph: t.PairGraph,
                                 srcAddr: string,
                                 dstAddr: string,
@@ -72,6 +75,12 @@ export const findRoutes = async(pairGraph: t.PairGraph,
   }
   const _srcAddrLC = srcAddr.toLowerCase()
   const _dstAddrLC = dstAddr.toLowerCase()
+
+  // Special case: routing from WETH as source, reduce max hops to 1
+  if (_WETH_ADDRS_LC.includes(_srcAddrLC)) {
+    log.debug(`findRoutes:  detected routing from wETH, reducing max hops to 1.`)
+    _constraints.maxDistance = 1
+  }
 
   if (_srcAddrLC === _dstAddrLC) {
     log.error(`Money laundering not supported (same token routes, ${srcAddr} -> ${dstAddr}).`)

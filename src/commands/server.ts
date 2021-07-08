@@ -74,6 +74,8 @@ export const server = async(port: string): Promise<void> => {
       let statusCode = OK
       if (body) {
         const {source, dest, amount, options} = route
+        log.debug(`\nRoute Request: ${amount} ${source} to ${dest}` +
+                  `\n  options: ${JSON.stringify(options, null, 0)}\n`)
         // log.debug(`Request: \n` +
         //           `source: ${source} (amount: ${amount} - typeof ${typeof amount})\n` +
         //           `dest: ${dest}\n` +
