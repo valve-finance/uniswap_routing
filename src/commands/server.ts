@@ -29,7 +29,7 @@ export const server = async(port: string): Promise<void> => {
     }
   }
   let _uniData: t.UniData = await initUniData()
-  let _routeCache = new RouteCache(_uniData.pairGraph)
+  let _routeCache = new RouteCache(_uniData.pairGraph, c.deprecatedTokenCnstr)
 
   const app = express()
   app.set('trust proxy', true)

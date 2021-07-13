@@ -5,6 +5,7 @@ import * as r from './../utils/routing'
 import * as c from './../utils/constants'
 import { initUniData } from '../utils/data'
 import { RouteCache } from '../routeCache'
+import { getUniRouteV2 } from '../utils/uniswapSDK'
 
 import express from 'express'
 import http from 'http'
@@ -17,6 +18,7 @@ import socketio from 'socket.io'
 const rateLimitMem = require('./../middleware/rateLimiterMem.js')
 
 const log = ds.getLog('socketServer')
+
 
 // Placeholder until we get bull / redis in
 let _jobId = 0
@@ -53,7 +55,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
   const server = new http.Server(app)
 
   let _uniData: t.UniData = await initUniData()
-  let _routeCache = new RouteCache(_uniData.pairGraph)
+  let _routeCache = new RouteCache(_uniData.pairGraph, c.deprecatedTokenCnstr)
   
   //  TODO: 
   //        - Look at rate limiting socket requests/commands too.
@@ -165,6 +167,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
           requestId,
           status: 'Determining routes.',
         })
+
         const _routes = await _routeCache.getRoutes(source, dest)
 
         // TODO: consider pushing the filtering below into the routeCache
@@ -179,11 +182,23 @@ export const startSocketServer = async(port: string): Promise<void> => {
           requestId,
           status: 'Getting price quotes.',
         })
-        const _costedRoutes: t.VFRoutes = await r.costRoutes(_uniData.pairData,
-                                                              _uniData.tokenData,
-                                                              _filteredRoutes,
-                                                              amount,
-                                                              _options.max_impact.value)
+        const _costedRoutesP: Promise<t.VFRoutes> = r.costRoutes(_uniData.pairData,
+                                                                _uniData.tokenData,
+                                                                _filteredRoutes,
+                                                                amount,
+                                                                _options.max_impact.value)
+                                                    .catch(error => {
+                                                      // TODO: signal an error in routing to the client
+                                                      return []
+                                                    })
+        
+        const _uniRouteP: Promise<string> = getUniRouteV2(source, dest, amount)
+                                            .catch(error => { return '' })
+
+        const results = await Promise.all([_costedRoutesP, _uniRouteP])
+        const _costedRoutes: t.VFRoutes = results[0]
+        const _uniRoute: string = results[1]
+
         // log.debug(`Costed routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
         
         const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(_uniData.pairData,
@@ -199,7 +214,8 @@ export const startSocketServer = async(port: string): Promise<void> => {
         socket.emit('route', {
           requestId,
           status: 'Completed request.',
-          routes
+          routes,
+          uniRoute: _uniRoute
         })
       }
 

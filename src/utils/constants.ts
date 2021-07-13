@@ -53,3 +53,10 @@ export const noHubTokenCnstr: t.Constraints = {
     "0xb2a9a0f34e3140de9b9a489b33fc049102a1808e"
   ]
 }
+
+export const deprecatedTokenCnstr: t.Constraints = {
+  maxDistance: 3,
+  ignoreTokenIds: [
+    "0xd233d1f6fd11640081abb8db125f722b5dc729dc"  // Old USD Token:
+  ]
+}

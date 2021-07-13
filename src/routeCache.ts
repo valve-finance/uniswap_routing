@@ -25,7 +25,8 @@ interface RouteCacheMap {
 
 // TODO: modify this abstraction to use Redis
 export class RouteCache {
-  constructor(pairGraph: t.PairGraph)
+  constructor(pairGraph: t.PairGraph,
+              constraints?: t.Constraints)
   {
     this._routeCache = {
       oldestRouteMs: 0,
@@ -33,9 +34,7 @@ export class RouteCache {
       cacheMap: {}
     }
 
-    this._routeConstraints = {
-      maxDistance: 3
-    }
+    this._routeConstraints = constraints ? constraints : { maxDistance: 3 }
 
     this._pairGraph = pairGraph
   }
