@@ -4,6 +4,7 @@ import { test } from './commands/test'
 import { report } from './commands/report'
 import { shell } from './commands/shell'
 import { server } from './commands/server'
+import { startSocketServer } from './commands/socketServer'
 
 const program = new Command();
 
@@ -55,6 +56,16 @@ program
   .action(async (port) => {
     port = port || DEFAULT_PORT
     await server(port)
+  })
+
+const DEFAULT_SOCKET_SVR_PORT = '3031'
+program
+  .command('socketServer [port]')
+  .description('Starts a socket server that accepts route requests. Default port is ' +
+               `${DEFAULT_SOCKET_SVR_PORT} that can be overriden with the optional port argment.`)
+  .action(async (port) => {
+    port = port || DEFAULT_SOCKET_SVR_PORT
+    await startSocketServer(port)
   })
 
 program

@@ -2,6 +2,7 @@ import * as ds from './../utils/debugScopes'
 import * as t from './../utils/types'
 import { sanitizeProperty, sanitizePropertyType } from '../utils/misc'
 import * as r from './../utils/routing'
+import * as c from './../utils/constants'
 import { initUniData } from '../utils/data'
 import { RouteCache } from '../routeCache'
 
@@ -15,10 +16,6 @@ const rateLimitMem = require('./../middleware/rateLimiterMem.js')
 
 const log = ds.getLog('server')
 
-// HTTP Status Codes
-const OK = 200
-const BAD_REQUEST = 400
-const INTERNAL_SERVER_ERROR = 500
 
 export const server = async(port: string): Promise<void> => {
   log.info(`Starting Uniswap Routing Server on port ${port}...\n` +
@@ -32,7 +29,7 @@ export const server = async(port: string): Promise<void> => {
     }
   }
   let _uniData: t.UniData = await initUniData()
-  let _routeCache = new RouteCache(_uniData.pairGraph)
+  let _routeCache = new RouteCache(_uniData.pairGraph, c.deprecatedTokenCnstr)
 
   const app = express()
   app.set('trust proxy', true)
@@ -48,11 +45,9 @@ export const server = async(port: string): Promise<void> => {
   app.use(express.urlencoded({extended: true, limit: '5mb'}))
 
   app.get(/.*/, async (req:any, res:any) => {
-    res.status(OK).send('Welcome to Uniswap V2 Route Optimization Service.')
+    res.status(c.OK).send('Welcome to Uniswap V2 Route Optimization Service.')
   })
 
-  const MAX_HOPS = 3
-  const MAX_RESULTS = 100
   app.post(/.*/, async (req:any, res:any) => {
     try {
       const _startMs = Date.now()
@@ -60,7 +55,7 @@ export const server = async(port: string): Promise<void> => {
 
       if (!body.hasOwnProperty('route') && !body.hasOwnProperty('status')) {
         log.error(`Bad request. Body does not cotain 'route' or 'status' object.`)
-        res.status(BAD_REQUEST).end()
+        res.status(c.BAD_REQUEST).end()
       }
 
       const result:any = {}
@@ -71,7 +66,7 @@ export const server = async(port: string): Promise<void> => {
       }
 
       const { route } = body
-      let statusCode = OK
+      let statusCode = c.OK
       if (body) {
         const {source, dest, amount, options} = route
         log.debug(`\nRoute Request: ${amount} ${source} to ${dest}` +
@@ -95,13 +90,13 @@ export const server = async(port: string): Promise<void> => {
           max_hops: {
             value: 3,
             min: 1,
-            max: MAX_HOPS,
+            max: c.MAX_HOPS,
             type: 'int'
           },
           max_results: {
             value: 5,
             min: 1,
-            max: MAX_RESULTS,
+            max: c.MAX_RESULTS,
             type: 'int'
           },
           max_impact: {
@@ -142,7 +137,7 @@ export const server = async(port: string): Promise<void> => {
         }
 
         if (sanitizeStr !== '') {
-          statusCode = BAD_REQUEST
+          statusCode = c.BAD_REQUEST
           result.error = sanitizeStr
           log.debug(sanitizeStr)
         } else {
@@ -181,7 +176,7 @@ export const server = async(port: string): Promise<void> => {
       // log.debug(`Returned result.routes:\n${JSON.stringify(result.routes, null, 2)}`)
     } catch (error) {
       log.error(error)
-      res.status(INTERNAL_SERVER_ERROR).json({error: 'Internal Server Error'})
+      res.status(c.INTERNAL_SERVER_ERROR).json({error: 'Internal Server Error'})
     }
   })
  

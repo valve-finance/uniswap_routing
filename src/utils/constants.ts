@@ -1,12 +1,21 @@
 import * as t from './types'
 
+// HTTP Status Codes
+//   TODO: use a real lib w/ more resolution/detail
+export const OK = 200
+export const BAD_REQUEST = 400
+export const INTERNAL_SERVER_ERROR = 500
+
+export const MAX_HOPS = 3
+export const MAX_RESULTS = 100
+
 export const noHubTokenCnstr: t.Constraints = {
   maxDistance: 3,
   ignoreTokenIds: [
     // WETH:
-    "0x477b466750c31c890db3208816d60c8585be7f0e",
-    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",   // The legit one w/ most txns
     "0xd73d6d4c463df976399acd80ea338384e247c64b",
+    "0x477b466750c31c890db3208816d60c8585be7f0e",
     // DAI:
     "0x6b175474e89094c44da98b954eedeac495271d0f",
     "0x89d24a6b4ccb1b6faa2625fe562bdd9a23260359",
@@ -42,5 +51,12 @@ export const noHubTokenCnstr: t.Constraints = {
     // MKR:
     "0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2",
     "0xb2a9a0f34e3140de9b9a489b33fc049102a1808e"
+  ]
+}
+
+export const deprecatedTokenCnstr: t.Constraints = {
+  maxDistance: 3,
+  ignoreTokenIds: [
+    "0xd233d1f6fd11640081abb8db125f722b5dc729dc"  // Old USD Token:
   ]
 }

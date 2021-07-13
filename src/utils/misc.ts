@@ -61,10 +61,6 @@ const zeroString = (numZeros: number):string =>
  * @param value 
  * @param decimals 
  * 
- * TODO: tons of corner cases to handle:
- *        -  .23
- *        -  more frac digits than decimals
- * 
  */
 export const getIntegerString = (value: string, decimals: number):string =>
 {
