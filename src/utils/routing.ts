@@ -21,7 +21,8 @@ const _routeSearch = (g: t.PairGraph,
                      hops: number, 
                      constraints: t.Constraints,
                      route: any, 
-                     rolledRoutes: t.VFStackedRoutes, 
+                     rolledRoutes: t.VFStackedRoutes,
+                     prevOriginAddr: string,
                      originAddr: string, 
                      destAddr: string): void => 
 {
@@ -32,6 +33,10 @@ const _routeSearch = (g: t.PairGraph,
     for (const neighbor of neighbors) {
       if (constraints.ignoreTokenIds && constraints.ignoreTokenIds.includes(neighbor)) {
         continue
+      }
+      if (neighbor === prevOriginAddr) {
+        continue    // Prevent cycle back to last origin addr (i.e. FEI TRIBE cycle
+                    // of FEI > WETH > FEI > TRIBE)
       }
 
       // TODO: filter the pairIds of the edge with the constraints.ignorePairIds and then continue
@@ -46,7 +51,14 @@ const _routeSearch = (g: t.PairGraph,
       }
 
       if (originAddr !== neighbor) {
-        _routeSearch(g, hops, constraints, _route, rolledRoutes, neighbor, destAddr)
+        _routeSearch(g, 
+                     hops,
+                     constraints,
+                     _route,
+                     rolledRoutes,
+                     originAddr,
+                     neighbor,
+                     destAddr)
       }
     }
   }
@@ -111,7 +123,14 @@ export const findRoutes = async(pairGraph: t.PairGraph,
 
   let hops = 0
   let route: any = []
-  _routeSearch(pairGraph, hops, _constraints, route, rolledRoutes, _srcAddrLC, _dstAddrLC)
+  _routeSearch(pairGraph,
+               hops,
+               _constraints,
+               route,
+               rolledRoutes,
+               '',
+               _srcAddrLC,
+               _dstAddrLC)
 
   rolledRoutes.sort((a: any, b:any) => {
     return a.length - b.length    // Ascending order by route length
