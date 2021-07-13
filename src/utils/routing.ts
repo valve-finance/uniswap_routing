@@ -76,7 +76,8 @@ export const findRoutes = async(pairGraph: t.PairGraph,
   const _srcAddrLC = srcAddr.toLowerCase()
   const _dstAddrLC = dstAddr.toLowerCase()
 
-  // Special case: routing from WETH as source, reduce max hops to 1
+  // Special case: routing from WETH as source, reduce max hops to 1 as this starting node has 30k+
+  //               neighbors and doesn't finish in reasonable time.
   if (_WETH_ADDRS_LC.includes(_srcAddrLC)) {
     log.debug(`findRoutes:  detected routing from wETH, reducing max hops to 1.`)
     _constraints.maxDistance = 1
@@ -210,10 +211,15 @@ export const unstackRoutes = (stackedRoutes: t.VFStackedRoutes): t.VFRoutes =>
   return routes
 }
 
+/*
+ * TODO: 
+ *   - examine TODO's below, esp. handling of precision (we lose precision here vs. UNI b/c
+ *     we convert to 18 dec. places internally instead of arbitrary)
+ */
 export const costRoutes = async (allPairData: t.Pairs,
                                  tokenData: t.Tokens,
                                  routes: t.VFRoutes,
-                                 amount: number,
+                                 amount: string,
                                  maxImpact: number = 10.0,
                                  updatePairData: boolean = true,
                                  cacheEstimates: boolean = true): Promise<t.VFRoutes> =>
@@ -251,7 +257,9 @@ export const costRoutes = async (allPairData: t.Pairs,
   }
 
   for (const route of routes) {
-    let inputAmount = amount.toString()
+    let inputAmount = amount    // This is the value passed in and will be converted
+                                // to an integer representation scaled by n decimal places
+                                // in getIntegerString (as called by computeTradeEstimates)
     let exceededImpact = false
     let failedRoute = false
 

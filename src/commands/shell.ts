@@ -62,9 +62,10 @@ export const shell = async(): Promise<void> => {
           }
 
           validEntry = false
+          let amtPayToken = ''
           let _amtPayToken = 0.0
           while (!validEntry) {
-            const amtPayToken = await _promptUser(`Swap: how much ${_payTokenSymbol} (${_payToken}) would you like to spend (e.g. 1.28)?`)
+            amtPayToken = await _promptUser(`Swap: how much ${_payTokenSymbol} (${_payToken}) would you like to spend (e.g. 1.28)?`)
             try {
               _amtPayToken = parseFloat(amtPayToken)
               validEntry = true
@@ -99,7 +100,7 @@ export const shell = async(): Promise<void> => {
 
           const _costedRoutes = await r.costRoutes(_uniData.pairData,
                                                    _uniData.tokenData,
-                                                   _routes, _amtPayToken,
+                                                   _routes, amtPayToken,
                                                    _settings['maxImpact'].value)
           // log.info(`Routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
           
