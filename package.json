@@ -41,7 +41,8 @@
     "build": "rm -rf ./dist && tsc",
     "debug": "rm -rf ./dist && tsc && NODE_ENV=development node --inspect -r esm ./dist/index.js",
     "develop": "rm -rf ./dist && tsc && NODE_ENV=development node -r esm ./dist/index.js",
-    "production": "rm -rf ./dist && tsc && NODE_ENV=production node -r esm ./dist/index.js"
+    "production": "rm -rf ./dist && tsc && NODE_ENV=production node -r esm ./dist/index.js",
+    "pm2": "rm -rf ./dist && tsc && NODE_ENV=production && pm2 start ./src/ecosystem.config.js"
   },
   "repository": {
     "type": "git",
