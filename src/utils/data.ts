@@ -3,6 +3,7 @@ import * as uniGraphV2 from './../graphProtocol/uniswapV2'
 import * as ds from './debugScopes'
 import * as p from './persistence'
 import * as t from './types'
+import { WETH_ADDR } from './constants'
 
 const graphlib = require('@dagrejs/graphlib')
 
@@ -11,18 +12,24 @@ const ALL_PAIRS_FILE = 'all_pairs_v2.json'
 const ALL_TOKENS_FILE = 'all_tokens.json'
 const MAX_DATA_AGE = Duration.fromObject({ days: 5 })
 
-export const initUniData = async(force=false): Promise<t.UniData> => {
+export const initUniData = async(force=false, buildWethPairDict=true): Promise<t.UniData> => {
   log.info('Initializing Uniswap data. Please wait (~ 1 min.) ...')
 
   const _rawPairData: any = await getPairData({ignorePersisted: force})
   const _allTokenData: any = await getTokenData({ignorePersisted: force})
   const _pairGraph: any = await constructPairGraph(_rawPairData)
 
-  return {
+  const uniData: t.UniData = {
     pairGraph: _pairGraph,
     tokenData: _allTokenData,
-    pairData: _rawPairData
+    pairData: _rawPairData,
   }
+
+  if (buildWethPairDict) {
+    uniData.wethPairData = buildWethPairLookup(_rawPairData)
+  }
+
+  return uniData
 }
 
 /**
@@ -163,4 +170,28 @@ export const constructPairGraph = async(allPairData: t.Pairs): Promise<t.PairGra
 
   await p.storeObject('Graph_Data.json', _g)
   return _g
+}
+
+/**
+ * buildWethPairLookup:  Builds a dictionary that allows token-WETH pairs to be found using
+ *                       token addr.
+ * 
+ * @param allPairData 
+ * @returns 
+ */
+export const buildWethPairLookup = (allPairData: t.Pairs): t.WethPairIdDict => {
+  const wethPairLookup: t.WethPairIdDict = {}
+
+  for (const pairId of allPairData.getPairIds()) {
+    const pair = allPairData.getPair(pairId)
+    const { token0, token1 } = pair
+
+    if (token0.id === WETH_ADDR) {
+      wethPairLookup[token1.id] = pairId
+    } else if (token1.id === WETH_ADDR) {
+      wethPairLookup[token0.id] = pairId
+    }
+  }
+
+  return wethPairLookup
 }

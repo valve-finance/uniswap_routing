@@ -9,11 +9,14 @@ export const INTERNAL_SERVER_ERROR = 500
 export const MAX_HOPS = 3
 export const MAX_RESULTS = 100
 
+export const WETH_ADDR = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+export const USDC_ADDR = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+
 export const noHubTokenCnstr: t.Constraints = {
-  maxDistance: 3,
+  maxDistance: MAX_HOPS,
   ignoreTokenIds: [
     // WETH:
-    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",   // The legit one w/ most txns
+    WETH_ADDR,                                      // The legit one w/ most txns
     "0xd73d6d4c463df976399acd80ea338384e247c64b",
     "0x477b466750c31c890db3208816d60c8585be7f0e",
     // DAI:
@@ -21,9 +24,9 @@ export const noHubTokenCnstr: t.Constraints = {
     "0x89d24a6b4ccb1b6faa2625fe562bdd9a23260359",
     "0xf035f1fbdae1aedb952f904c641e7db1a2a52537",
     // USDC:
+    USDC_ADDR,
     "0x0432aac809b2c07249dbc04cc5f2337091dd6e87",
     "0x2cd68ecf48b0687c95ee6c06d33389688c3cbb8e",
-    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
     "0xacf9ea5062193181120832baf6d49f5ab992338b",
     "0xc93a59888e7e6f2849ba94acf767266299c4c415",   // <-- ?
     "0xefb9326678757522ae4711d7fb5cf321d6b664e6",   // <-- ?
@@ -55,7 +58,7 @@ export const noHubTokenCnstr: t.Constraints = {
 }
 
 export const deprecatedTokenCnstr: t.Constraints = {
-  maxDistance: 3,
+  maxDistance: MAX_HOPS,
   ignoreTokenIds: [
     "0xd233d1f6fd11640081abb8db125f722b5dc729dc"  // Old USD Token:
   ]

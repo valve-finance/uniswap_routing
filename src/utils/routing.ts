@@ -1,5 +1,6 @@
 import * as ds from './debugScopes'
 import * as t from './types'
+import { WETH_ADDR, USDC_ADDR } from './constants'
 import { getUpdatedPairData } from './../graphProtocol/uniswapV2'
 import { getIntegerString  } from './misc'
 import { ChainId,
@@ -16,7 +17,8 @@ import JSBI from 'jsbi'
 
 const log = ds.getLog('routing')
 
-
+// New slightly more optimized alg.: 
+//
 const _routeSearch = (g: t.PairGraph, 
                      hops: number, 
                      constraints: t.Constraints,
@@ -26,43 +28,88 @@ const _routeSearch = (g: t.PairGraph,
                      originAddr: string, 
                      destAddr: string): void => 
 {
-  if (constraints.maxDistance && hops < constraints.maxDistance) {
-    let neighbors = g.neighbors(originAddr)
-    hops++
+  let neighbors = g.neighbors(originAddr)
+  hops++
 
-    for (const neighbor of neighbors) {
-      if (constraints.ignoreTokenIds && constraints.ignoreTokenIds.includes(neighbor)) {
+  for (const neighbor of neighbors) {
+    if (neighbor === destAddr) {
+      // Optimization: rather than make this a mulitgraph, represent all pairs in a single edge and
+      //               store their ids as a property of that edge.
+      const _route: any = [...route, { src: originAddr, dst: neighbor, pairIds: g.edge(originAddr, neighbor).pairIds }]
+      rolledRoutes.push(_route)
+    } else if (constraints.maxDistance && hops < constraints.maxDistance) {
+      if (neighbor === originAddr ||
+          neighbor === prevOriginAddr ||    // Prevent cycle back to last origin addr (i.e. FEI TRIBE cycle of FEI > WETH > FEI > TRIBE).
+                                            // We limit max hops to 3 so cycles like FEI > x > y > FEI aren't
+                                            // a consideration (otherwise we'd need to expand this search's
+                                            // memory of previous visits.)
+          (constraints.ignoreTokenIds && constraints.ignoreTokenIds.includes(neighbor))) {
         continue
       }
-      if (neighbor === prevOriginAddr) {
-        continue    // Prevent cycle back to last origin addr (i.e. FEI TRIBE cycle
-                    // of FEI > WETH > FEI > TRIBE)
-      }
-
-      // TODO: filter the pairIds of the edge with the constraints.ignorePairIds and then continue
-      //       constructing the route.
 
       // Optimization: rather than make this a mulitgraph, represent all pairs in a single edge and
       //               store their ids as a property of that edge.
       const _route: any = [...route, { src: originAddr, dst: neighbor, pairIds: g.edge(originAddr, neighbor).pairIds }]
-      if (neighbor === destAddr) {
-        rolledRoutes.push(_route)
-        continue
-      }
-
-      if (originAddr !== neighbor) {
-        _routeSearch(g, 
-                     hops,
-                     constraints,
-                     _route,
-                     rolledRoutes,
-                     originAddr,
-                     neighbor,
-                     destAddr)
-      }
+      _routeSearch(g, 
+                   hops,
+                   constraints,
+                   _route,
+                   rolledRoutes,
+                   originAddr,
+                   neighbor,
+                   destAddr)
     }
   }
 }
+
+// Older alg:
+//
+// const _routeSearch = (g: t.PairGraph, 
+//                       hops: number, 
+//                       constraints: t.Constraints,
+//                       route: any, 
+//                       rolledRoutes: t.VFStackedRoutes,
+//                       prevOriginAddr: string,
+//                       originAddr: string, 
+//                       destAddr: string): void => 
+// {
+//   if (constraints.maxDistance && hops < constraints.maxDistance) {
+//     let neighbors = g.neighbors(originAddr)
+//     hops++
+
+//     for (const neighbor of neighbors) {
+//       if (constraints.ignoreTokenIds && constraints.ignoreTokenIds.includes(neighbor)) {
+//         continue
+//       }
+//       if (neighbor === prevOriginAddr) {
+//         continue    // Prevent cycle back to last origin addr (i.e. FEI TRIBE cycle
+//         // of FEI > WETH > FEI > TRIBE)
+//       }
+
+//       // TODO: filter the pairIds of the edge with the constraints.ignorePairIds and then continue
+//       //       constructing the route.
+
+//       // Optimization: rather than make this a mulitgraph, represent all pairs in a single edge and
+//       //               store their ids as a property of that edge.
+//       const _route: any = [...route, { src: originAddr, dst: neighbor, pairIds: g.edge(originAddr, neighbor).pairIds }]
+//       if (neighbor === destAddr) {
+//         rolledRoutes.push(_route)
+//         continue
+//       }
+
+//       if (originAddr !== neighbor) {
+//         _routeSearch(g, 
+//                      hops,
+//                      constraints,
+//                      _route,
+//                      rolledRoutes,
+//                      originAddr,
+//                      neighbor,
+//                      destAddr)
+//       }
+//     }
+//   }
+// }
 
 const _WETH_ADDRS_LC = [ "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",   // The legit one w/ most txns
                          "0xd73d6d4c463df976399acd80ea338384e247c64b",
@@ -246,9 +293,13 @@ export const costRoutes = async (allPairData: t.Pairs,
   const costedRoutes: t.VFRoutes = []
   const estimateCache: any = {}
 
+  // Deep copy routes b/c annotating / updating src/dstAmount/USD on them is being
+  // retained when they're pulled from the cache:
+  const _routes = JSON.parse(JSON.stringify(routes))
+
   // Convert the specified double that is maxImpact to a fractional value with reasonable
   // precision:
-  const maxImpactFrac = new Fraction(JSBI.BigInt(Math.floor(maxImpact * 1e18)), JSBI.BigInt(1e18))
+  // const maxImpactFrac = new Fraction(JSBI.BigInt(Math.floor(maxImpact * 1e18)), JSBI.BigInt(1e18))
 
   /* TODO:
    *  - expand and extend this into a proper TTL based cache in Redis or other.
@@ -261,7 +312,7 @@ export const costRoutes = async (allPairData: t.Pairs,
    */
   if (updatePairData) {
     const start: number = Date.now()
-    const pairIdsToUpdate: Set<string> = getAllPairsIdsOfAge(allPairData, routes)
+    const pairIdsToUpdate: Set<string> = getAllPairsIdsOfAge(allPairData, _routes)
     const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
     const updateTimeMs = Date.now()
     allPairData.updatePairs(updatedPairs, updateTimeMs)
@@ -275,7 +326,7 @@ export const costRoutes = async (allPairData: t.Pairs,
     entries: 0
   }
 
-  for (const route of routes) {
+  for (const route of _routes) {
     let inputAmount = amount    // This is the value passed in and will be converted
                                 // to an integer representation scaled by n decimal places
                                 // in getIntegerString (as called by computeTradeEstimates)
@@ -364,6 +415,74 @@ export const costRoutes = async (allPairData: t.Pairs,
   return costedRoutes
 }
 
+/**
+ * To compute a token amount's approx USD value:
+ * 
+ *  TokenAmountUSD = TokenAmount * Weth/Token * USDC/Weth
+ * 
+ * This method builds a lookup that lets you get the pair IDs needed to compute this:
+ * {
+ *    wethId: string,
+ *    wethTokenPairId: string,
+ *    wethUsdtPairId: string
+ * }
+ * @param allPair 
+ */
+const getEstimatedUSD = (allPairData: t.Pairs,
+                         wethPairDict: t.WethPairIdDict,
+                         tokenId: string,
+                         tokenAmount: string): string => {
+
+  let wethPerToken: string = '1'    // Assume input token ID is for WETH
+
+  if (tokenId !== WETH_ADDR) {
+    const wethPairId: string = wethPairDict[tokenId] 
+    if (!wethPairId) {
+      log.warn(`getEstimatedUSD: no WETH pair for ${tokenId}.`)
+      return ''
+    }
+    const wethPair: t.Pair = allPairData.getPair(wethPairId)
+    wethPerToken = (wethPair.token0.id === WETH_ADDR) ? wethPair.token0Price : wethPair.token1Price
+  } 
+
+  const usdcWethPairId: string = wethPairDict[USDC_ADDR]
+  const usdcWethPair: t.Pair = allPairData.getPair(usdcWethPairId)
+  const usdcPerWeth: string = (usdcWethPair.token0.id === USDC_ADDR) ?
+                              usdcWethPair.token0Price : usdcWethPair.token1Price
+
+  try {
+    const amountUSD: number = parseFloat(tokenAmount) * parseFloat(wethPerToken) * parseFloat(usdcPerWeth)
+    // log.debug(`getEstimateUSD (${tokenId}):\n` +
+    //           `  ${tokenAmount} * ${wethPerToken} * ${usdcPerWeth} = \n` +
+    //           `    ${amountUSD.toFixed(2)}`)
+    return amountUSD.toFixed(2)
+  } catch (ignoredError) {
+    log.warn(`getEstimatedUSD failed, ignoring.\n${ignoredError}`)
+  }
+  return ''
+}
+
+export const annotateRoutesWithUSD = async (allPairData: t.Pairs,
+                                            wethPairDict: t.WethPairIdDict,
+                                            routes: t.VFRoutes,
+                                            updatePairData: boolean=false): Promise<void> => {
+  // if (updatePairData) {
+  //   // TODO ...
+  //   //      or update this in costRoutes
+  // }
+
+  for (const route of routes) {
+    for (const segment of route) {
+      if (segment.srcAmount) {
+        segment.srcUSD = getEstimatedUSD(allPairData, wethPairDict, segment.src, segment.srcAmount)
+      }
+      if (segment.dstAmount) {
+        segment.dstUSD = getEstimatedUSD(allPairData, wethPairDict, segment.dst, segment.dstAmount)
+      }
+    }
+  }
+}
+
 export const convertRoutesToLegacyFmt = (allPairData: t.Pairs, tokenData: t.Tokens, routes: t.VFRoutes): any => {
   const legacyRoutesFmt: any = []
   for (const route of routes) {
@@ -390,6 +509,8 @@ export const convertRoutesToLegacyFmt = (allPairData: t.Pairs, tokenData: t.Toke
         impact: segment.impact,
         amountIn: segment.srcAmount,
         amountOut: segment.dstAmount,
+        amountInUSD: segment.srcUSD,
+        amountOutUSD: segment.dstUSD,
         token0,
         token1
       }

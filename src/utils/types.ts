@@ -7,33 +7,33 @@ import log from "loglevel"
  * time.
  */
 export interface PairToken {
-  id: string;
-  name: string;
-  symbol: string;
+  id: string
+  name: string
+  symbol: string
 }
 
 export interface PairLite {
-  id: string;
-  reserve0: string;
-  reserve1: string;
-  reserveUSD: string;
-  token0Price: string;
-  token1Price: string;
-  updatedMs?: number;
-  updatedBlock?: number;
+  id: string
+  reserve0: string
+  reserve1: string
+  reserveUSD: string
+  token0Price: string
+  token1Price: string
+  updatedMs?: number
+  updatedBlock?: number
 }
 
 export interface Pair {
-  id: string;
-  reserve0: string;
-  reserve1: string;
-  reserveUSD: string;
-  token0: PairToken;
-  token0Price: string;
-  token1: PairToken;
-  token1Price: string;
-  updatedMs?: number;
-  updatedBlock?: number;
+  id: string
+  reserve0: string
+  reserve1: string
+  reserveUSD: string
+  token0: PairToken
+  token0Price: string
+  token1: PairToken
+  token1Price: string
+  updatedMs?: number
+  updatedBlock?: number
 }
 
 export interface PairDict { [index: string]: Pair }
@@ -112,10 +112,10 @@ export class Pairs {
  * time.
  */
 export interface Token {
-  decimals: string;
-  id: string;
-  name: string;
-  symbol: string;
+  decimals: string
+  id: string
+  name: string
+  symbol: string
 }
 
 export interface TokenDict { [index: string]: Token }
@@ -169,9 +169,9 @@ export class Tokens {
  * StackedRoutes (formerly RolledRoutes):
  */
 export interface VFStackedSegment {
-  src: string;
-  dst: string;
-  pairIds: string[];
+  src: string
+  dst: string
+  pairIds: string[]
 }
 export type VFStackedRoute = VFStackedSegment[]
 export type VFStackedRoutes = VFStackedRoute[]
@@ -180,12 +180,14 @@ export type VFStackedRoutes = VFStackedRoute[]
  *  UnstackedRoute (i.e. regular route with 1 pair per segment)
  */
 export interface VFSegment {
-  src: string;
-  dst: string;
-  pairId: string;
-  impact?: string;
-  srcAmount?: string;
-  dstAmount?: string;
+  src: string
+  dst: string
+  pairId: string
+  impact?: string
+  srcAmount?: string
+  dstAmount?: string
+  srcUSD?: string
+  dstUSD?: string
 }
 export type VFRoute = VFSegment[]
 export type VFRoutes = VFRoute[]
@@ -195,9 +197,13 @@ export type VFRoutes = VFRoute[]
  */
 // TODO: turn into a class with methods that LC Ids added etc.
 export interface Constraints {
-  maxDistance?: number;
-  ignoreTokenIds?: Array<string>;
-  ignorePairIds?: Array<string>;
+  maxDistance?: number
+  ignoreTokenIds?: Array<string>
+  ignorePairIds?: Array<string>
+}
+
+export interface WethPairIdDict {
+  [index: string]: string
 }
 
  // Generic model for the pair graph for now.
@@ -208,7 +214,8 @@ export interface PairGraph {
 }
 
 export interface UniData {
-  pairGraph: any;
-  tokenData: Tokens;
-  pairData: Pairs;
+  pairGraph: any
+  tokenData: Tokens
+  pairData: Pairs
+  wethPairData?: WethPairIdDict
 }

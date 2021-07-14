@@ -13,6 +13,7 @@ import cors from 'cors'
 import helmet from 'helmet'
 import requestIp from 'request-ip'
 import socketio from 'socket.io'
+import { parse } from 'commander'
 
 // TODO: back with Redis instead of mem
 const rateLimitMem = require('./../middleware/rateLimiterMem.js')
@@ -200,22 +201,38 @@ export const startSocketServer = async(port: string): Promise<void> => {
         const _costedRoutes: t.VFRoutes = results[0]
         const _uniRoute: string = results[1]
 
+        _costedRoutes.sort((a: t.VFRoute, b: t.VFRoute) => {    // Sort descending by amount of destination token received
+          const aLastDstAmount = a[a.length-1].dstAmount
+          const bLastDstAmount = b[b.length-1].dstAmount
+          const aDstAmount = aLastDstAmount ? parseFloat(aLastDstAmount) : 0.0
+          const bDstAmount = bLastDstAmount ? parseFloat(bLastDstAmount) : 0.0
+          return bDstAmount - aDstAmount
+        })
         // log.debug(`Costed routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
-        
+
+        const _requestedCostedRoutes: t.VFRoutes = _costedRoutes.slice(0, _options.max_results.value)
+        // log.debug(`Requested Costed routes:\n${JSON.stringify(_requestedCostedRoutes, null, 2)}`)
+
+
+
+        if (_uniData.wethPairData) {
+          r.annotateRoutesWithUSD(_uniData.pairData, _uniData.wethPairData, _requestedCostedRoutes)
+        }
+
         const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(_uniData.pairData,
                                                             _uniData.tokenData,
-                                                            _costedRoutes)
+                                                            _requestedCostedRoutes)
 
-        _legacyFmtRoutes.sort((a: any, b: any) => {
-          return parseFloat(b.amountOut) - parseFloat(a.amountOut)    // Sort descending by amount of dest token received.
-                                                                      // TODO: fix to handle higher precision.
-        })
+        // _legacyFmtRoutes.sort((a: any, b: any) => {
+        //   return parseFloat(b.amountOut) - parseFloat(a.amountOut)    // Sort descending by amount of dest token received.
+        //                                                               // TODO: fix to handle higher precision.
+        // })
 
-        const routes = _legacyFmtRoutes.slice(0, _options.max_results.value)
+        // const routes = _legacyFmtRoutes.slice(0, _options.max_results.value)
         socket.emit('route', {
           requestId,
           status: 'Completed request.',
-          routes,
+          routes: _legacyFmtRoutes,
           uniRoute: _uniRoute
         })
       }
