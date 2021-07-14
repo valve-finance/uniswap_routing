@@ -71,7 +71,8 @@ export const startSocketServer = async(port: string): Promise<void> => {
   const socketServer = new socketio.Server(server, {
     cors: {
       origin: ["http://localhost:3000",
-               "http://playground.valve.finance.s3-website-us-west-2.amazonaws.com"],
+               "http://playground.valve.finance.s3-website-us-west-2.amazonaws.com",
+               "https://d28l1ccalf6wis.cloudfront.net/"],
       methods: ["GET", "POST"]
     }
   })
