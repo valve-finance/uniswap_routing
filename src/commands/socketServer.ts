@@ -217,19 +217,15 @@ export const startSocketServer = async(port: string): Promise<void> => {
 
 
         if (_uniData.wethPairData) {
-          r.annotateRoutesWithUSD(_uniData.pairData, _uniData.wethPairData, _requestedCostedRoutes)
+          await r.annotateRoutesWithUSD(_uniData.pairData, _uniData.wethPairData, _requestedCostedRoutes)
         }
+        // log.debug(`Annotated USD Costed routes:\n${JSON.stringify(_requestedCostedRoutes, null, 2)}`)
 
         const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(_uniData.pairData,
                                                             _uniData.tokenData,
                                                             _requestedCostedRoutes)
+        // log.debug(`Legacy fmt routes:\n${JSON.stringify(_legacyFmtRoutes, null, 2)}`)
 
-        // _legacyFmtRoutes.sort((a: any, b: any) => {
-        //   return parseFloat(b.amountOut) - parseFloat(a.amountOut)    // Sort descending by amount of dest token received.
-        //                                                               // TODO: fix to handle higher precision.
-        // })
-
-        // const routes = _legacyFmtRoutes.slice(0, _options.max_results.value)
         socket.emit('route', {
           requestId,
           status: 'Completed request.',

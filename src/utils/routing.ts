@@ -316,7 +316,7 @@ export const costRoutes = async (allPairData: t.Pairs,
     const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
     const updateTimeMs = Date.now()
     allPairData.updatePairs(updatedPairs, updateTimeMs)
-    log.debug(`Finished updating ${pairIdsToUpdate.size} pairs in ${Date.now() - start} ms`)
+    log.debug(`costRoutes: Finished updating ${pairIdsToUpdate.size} pairs in ${Date.now() - start} ms`)
   }
 
   const startCostMs: number = Date.now()
@@ -465,11 +465,31 @@ const getEstimatedUSD = (allPairData: t.Pairs,
 export const annotateRoutesWithUSD = async (allPairData: t.Pairs,
                                             wethPairDict: t.WethPairIdDict,
                                             routes: t.VFRoutes,
-                                            updatePairData: boolean=false): Promise<void> => {
-  // if (updatePairData) {
-  //   // TODO ...
-  //   //      or update this in costRoutes
-  // }
+                                            updatePairData: boolean=true): Promise<void> => {
+  if (updatePairData) {
+    const start: number = Date.now()
+    // Get all the <token>:WETH pair IDs, get the WETH/USDC pair ID
+    //
+    const pairIdsUSD: Set<string> = new Set<string>()
+    for (const route of routes) {
+      for (const seg of route) {
+        if (seg.src !== WETH_ADDR) {
+          pairIdsUSD.add(wethPairDict[seg.src])
+        }
+
+        if (seg.dst !== WETH_ADDR) {
+          pairIdsUSD.add(wethPairDict[seg.dst])
+        }
+      }
+    }
+    pairIdsUSD.add(wethPairDict[USDC_ADDR])
+
+    const pairIdsToUpdate = filterToPairIdsOfAge(allPairData, pairIdsUSD)
+    const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
+    const updateTimeMs = Date.now()
+    allPairData.updatePairs(updatedPairs, updateTimeMs)
+    log.debug(`annotateRoutesWithUSD: Finished updating ${pairIdsToUpdate.size} pairs in ${Date.now() - start} ms`)
+  }
 
   for (const route of routes) {
     for (const segment of route) {
@@ -656,4 +676,25 @@ export const getAllPairsIdsOfAge = (allPairData: t.Pairs,
   // log.debug(`getAllPairsIdsOfAge: returning ${pairIds.size} older than ${ageMs} ms.`)
 
   return pairIds
+}
+
+// TODO: merge / unify w/ above
+export const filterToPairIdsOfAge = (allPairData: t.Pairs,
+                                     pairIds: Set<string>,
+                                     ageMs: number = 1 * avgBlockMs): Set<string> =>
+{
+  const now = Date.now()
+  const pairIdsOfAge = new Set<string>()
+  for (const pairId of pairIds) {
+    const pairData = allPairData.getPair(pairId)
+    if (pairData &&
+        pairData.updatedMs &&
+        ((now - pairData.updatedMs) < ageMs)) {
+      continue
+    }
+
+    pairIdsOfAge.add(pairId)
+  }
+
+  return pairIdsOfAge
 }
