@@ -15,6 +15,7 @@ import helmet from 'helmet'
 import requestIp from 'request-ip'
 import socketio from 'socket.io'
 import { v4 as uuidv4 } from 'uuid'
+import cytoscape from 'cytoscape'
 
 
 // TODO: back with Redis instead of mem
@@ -260,7 +261,14 @@ export const startSocketServer = async(port: string): Promise<void> => {
       
       _options.multipath = true
       const resultObj = await _processRouteReq(reqType, _uniData, _routeCache, socket, requestId, source, dest, amount, _options)
-      const eleDatas = r.buildMultipathRoute(_uniData, source, dest, resultObj.routes)
+      r.annotateRoutesWithSymbols(_uniData.tokenData, resultObj.routes)
+      const tradeTree: r.TradeTreeNode | undefined = 
+        r.buildTradeTree(_uniData, source, dest, resultObj.routes)
+      let eleDatas: any = []
+      if (tradeTree) {
+        const cyGraph: cytoscape.Core = r.tradeTreeToCyGraph(tradeTree)
+        eleDatas = r.elementDataFromCytoscape(cyGraph)
+      }
       socket.emit('multipath', {
         requestId,
         elements: eleDatas

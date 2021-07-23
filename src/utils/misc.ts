@@ -11,6 +11,16 @@ export const padStr = (str: string, desiredWidth=25): string =>
   return str
 }
 
+export const getSpaces = (numSpaces: number = 0): string => 
+{
+  let spaceStr = ''
+  for (let spaceCnt = 0; spaceCnt < numSpaces; spaceCnt++) {
+    spaceStr += ' '
+  }
+  return spaceStr
+}
+
+
 
 /********************************************************************************
  * REST sanitization/error methods

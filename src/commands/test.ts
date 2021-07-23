@@ -3,6 +3,7 @@ import * as t from './../utils/types'
 import * as c from './../utils/constants'
 import * as r from './../utils/routing'
 import { initUniData } from '../utils/data'
+import { getSpaces } from '../utils/misc'
 
 import cytoscape from 'cytoscape'
 import { v4 as uuidv4 } from 'uuid';
@@ -352,15 +353,6 @@ export const getMultipath = async(amount: string, numTopRoutes: number = 10): Pr
   }
 }
 
-const _getSpaces = (numSpaces: number = 0): string => 
-{
-  let spaceStr = ''
-  for (let spaceCnt = 0; spaceCnt < numSpaces; spaceCnt++) {
-    spaceStr += ' '
-  }
-  return spaceStr
-}
-
 // Issues:
 //   - doesn't work if there are cycles possible
 //
@@ -372,7 +364,7 @@ const _dumpGraph = (graph: t.PairGraph,
                     hops: number = 0): void => 
 {
   const amtStr = (amountUSD) ? ` ($${amountUSD})` : ''
-  log.info(`${_getSpaces(hops * 3)}${graph.node(start)}${amtStr}`)
+  log.info(`${getSpaces(hops * 3)}${graph.node(start)}${amtStr}`)
   const _visited: string[] = [...visited]   // Detect cycles for this particular path
                                             // and prevent them.
   _visited.push(start)

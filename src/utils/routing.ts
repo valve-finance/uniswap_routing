@@ -2,7 +2,7 @@ import * as ds from './debugScopes'
 import * as t from './types'
 import { WETH_ADDR, USDC_ADDR, WETH_ADDRS_LC } from './constants'
 import { getUpdatedPairData } from './../graphProtocol/uniswapV2'
-import { getIntegerString  } from './misc'
+import { getIntegerString, getSpaces } from './misc'
 import { ChainId,
          Token,
          WETH,
@@ -15,6 +15,7 @@ import { ChainId,
 import { getAddress } from '@ethersproject/address'
 import JSBI from 'jsbi'
 import cytoscape from 'cytoscape'
+import crawl from 'tree-crawl'
 import { v4 as uuidv4 } from 'uuid'
 
 const log = ds.getLog('routing')
@@ -389,80 +390,200 @@ const _getEdgeId = (pairId: string): string =>
   return id
 }
 
-export const buildMultipathRoute = (uniData: t.UniData,
-                                    source: string,
-                                    dest: string,
-                                    routes: t.VFRoutes): any =>
+export interface TradeTreeNode {
+  value: {
+    uuid: string,
+    address: string,
+    symbol?: string,
+    amount?: string,
+    amountUSD?: string
+    pairId?: string,
+    impact?: string,
+  },
+  // parent?: TradeTreeNode,
+  children: TradeTreeNode[]
+}
+
+export const buildTradeTree = (uniData: t.UniData,
+                               source: string,
+                               dest: string,
+                               routes: t.VFRoutes): TradeTreeNode | undefined =>
 {
-  const cy: cytoscape.Core = cytoscape()
-  annotateRoutesWithSymbols(uniData.tokenData, routes)
+  let tradeTree: TradeTreeNode | undefined = undefined
 
-  // TODO: fix this comment (dumpster-fireus):
-  //
-  // Construct the trade graph from the top trades, annotating edges with trade
-  // information to make splitting / multipath decisions:
-  // Construct a trade tree--very different from the typical pair tree b/c it
-  // represents the traversal of the pair tree:
-  //
-  //
-  const TOLERANCE = 0.00001
   for (const route of routes) {
-    for (let segIdx = 0; segIdx < route.length; segIdx++) {
-      const seg = route[segIdx]
-      const hop = segIdx + 1
-      // const existingEdgeObj = subg.edge(seg.src, seg.dst)
-      // if (existingEdgeObj) {
-      //   if (!seg.dstUSD) {
-      //     continue
-      //   }
-      //   if ((parseFloat(seg.dstUSD) - parseFloat(existingEdgeObj.dstUSD)) > TOLERANCE) {
-      //     log.warn(`Algorithm 3 segment collision with mismatched USD amounts.`)
-      //   }
-      // }
 
-      const srcGraphId = `${seg.src}_${hop-1}`
-      if (cy.nodes(`#${srcGraphId}`).length === 0) {
-        cy.add({ group: 'nodes', 
-                  data: { id: srcGraphId, addr: seg.src, label: seg.srcSymbol } })
+    // Each route is a single path, so we keep track of the
+    // tree node we're inserting into as we iterate:
+    //
+    let node: TradeTreeNode | undefined = tradeTree
+    for (const seg of route) {
+      // Special cases handled in predicates below:
+      //    1. First time inserting into the tree, define the root.
+      //    2. Inserting the first segment of a route, we
+      //       have to process the src data.
+      //
+      if (!node) {
+        tradeTree = {
+          value: {
+            uuid: uuidv4(),
+            address: seg.src,
+            symbol: seg.srcSymbol,
+            amount: seg.srcAmount,
+            amountUSD: seg.srcUSD,
+          },
+          children: []
+        }
+
+        node = tradeTree
+      } else if (node === tradeTree /* root node */ && 
+                 node.value.address !== seg.src) {
+        throw Error(`buildTradeTree: root node does not match address ` +
+                    `${node.value.address} (${node.value.symbol}) of src ` +
+                    `in first segment of route.\n` +
+                    `${JSON.stringify(route, null, 2)}`)
       }
 
-      const dstGraphId = (seg.dst !== dest) ? `${seg.dst}_${hop}` : _getLastId(dest)
-      if (cy.nodes(`#${dstGraphId}`).length === 0) {
-        cy.add({ group: 'nodes', 
-                  data: { id: dstGraphId, addr: seg.src, label: seg.dstSymbol } })
+      // Add the destination of the segment to the tree if it doesn't exist
+      // already and then update the node pointer:
+      //
+      let dstNode: TradeTreeNode | undefined = 
+        node.children.find((searchNode: TradeTreeNode) => 
+                           searchNode.value.address === seg.dst)
+      if (!dstNode) {
+        dstNode = {
+          value: {
+            uuid: uuidv4(),
+            address: seg.dst,
+            symbol: seg.dstSymbol,
+            amount: seg.dstAmount,
+            amountUSD: seg.dstUSD,
+            pairId: seg.pairId,
+            impact: seg.impact
+          },
+          // parent: node,
+          children: []
+        }
+        node.children.push(dstNode)
       }
-
-      if (cy.edges(`[source = "${srcGraphId}"][target = "${dstGraphId}"]`).length === 0) {
-        const impact = parseFloat(seg.impact ? seg.impact : '0').toFixed(3)
-        const label = `$${seg.dstUSD},  ${impact}%`
-        cy.add({ group: 'edges', 
-                  data: { id: _getEdgeId(seg.pairId),
-                          source: srcGraphId,
-                          target: dstGraphId,
-                          label,
-                          pairId: seg.pairId,
-                          dstUsd: seg.dstUSD,
-                          slippage: seg.impact,
-                          hop }})
-      }
+      node = dstNode
     }
   }
 
-  // log.debug(`cy.elements.jsons()\n` +
-  //           `--------------------------------------------------------------------------------\n` +
-  //           `${JSON.stringify(cy.elements().jsons(), null, 2)}\n\n`)
-  // // log.debug(`cy.edges()\n` +
-  //           `--------------------------------------------------------------------------------\n` +
-  //           `${JSON.stringify(cy.edges(), null, 2)}\n\n`)
+  console.log(`Trade Tree\n` +
+              `================================================================================`)
+  crawl(tradeTree,
+        (node, context) => {
+          console.log(getSpaces(2* context.level) + (node ? node.value.symbol : ''))
+        },
+        { order: 'pre'})
 
-  // Need to clean up the graph structure into something that can be costed and
-  // provides sufficient decision making power for costing decisions:
-  //
-  const elements = cy.elements().jsons()
+  return tradeTree
+}
+
+// Useful for visualizing in our web client
+//
+export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode): cytoscape.Core =>
+{
+  const cy: cytoscape.Core = cytoscape()
+  crawl(tradeTree,
+        (node, context) => {
+          if (node) {
+            const nodeData = {
+              id: node.value.uuid,
+              addr: node.value.address,
+              label: `${node.value.symbol} ($${node.value.amountUSD})`
+            }
+            cy.add({ group: 'nodes', data: nodeData})
+
+            // Special case - root node has no parents and thus no edges. Only
+            // add an edge if the parent is not null:
+            //
+            if (context.parent) {
+              const parent = context.parent
+              const impact = parseFloat(node.value.impact ? node.value.impact : '0').toFixed(3)
+              // const label = `$${node.value.amountUSD},  ${impact}%`
+              const label = `${impact}%`
+              const edgeData = { 
+                id: uuidv4(),
+                label,
+                source: parent.value.uuid,
+                target: node.value.uuid,
+                pairId: node.value.pairId,
+                dstUsd: node.value.amountUSD,
+                slippage: node.value.impact,
+                hop: context.level - 1
+                }
+              cy.add({ group: 'edges', data: edgeData })
+            }
+          }
+        },
+        { order: 'pre'} )
+
+  return cy
+  // // To make a tree where only common segments from the start of the trade
+  // // are shared, the following must be true for each dest node:
+  // //    1. dest nodes must share the same source node
+  // //    2. 
+  // // TODO: fix this comment (dumpster-fireus):
+  // //
+  // // Construct the trade graph from the top trades, annotating edges with trade
+  // // information to make splitting / multipath decisions:
+  // // Construct a trade tree--very different from the typical pair tree b/c it
+  // // represents the traversal of the pair tree:
+  // //
+  // //
+  // const TOLERANCE = 0.00001
+  // for (const route of routes) {
+  //   for (let segIdx = 0; segIdx < route.length; segIdx++) {
+  //     const seg = route[segIdx]
+  //     const hop = segIdx + 1
+  //     // const existingEdgeObj = subg.edge(seg.src, seg.dst)
+  //     // if (existingEdgeObj) {
+  //     //   if (!seg.dstUSD) {
+  //     //     continue
+  //     //   }
+  //     //   if ((parseFloat(seg.dstUSD) - parseFloat(existingEdgeObj.dstUSD)) > TOLERANCE) {
+  //     //     log.warn(`Algorithm 3 segment collision with mismatched USD amounts.`)
+  //     //   }
+  //     // }
+
+  //     const srcGraphId = `${seg.src}_${hop-1}`
+  //     if (cy.nodes(`#${srcGraphId}`).length === 0) {
+  //       cy.add({ group: 'nodes', 
+  //                 data: { id: srcGraphId, addr: seg.src, label: seg.srcSymbol } })
+  //     }
+
+  //     const dstGraphId = (seg.dst !== dest) ? `${seg.dst}_${hop}` : _getLastId(dest)
+  //     if (cy.nodes(`#${dstGraphId}`).length === 0) {
+  //       cy.add({ group: 'nodes', 
+  //                 data: { id: dstGraphId, addr: seg.src, label: seg.dstSymbol } })
+  //     }
+
+  //     if (cy.edges(`[source = "${srcGraphId}"][target = "${dstGraphId}"]`).length === 0) {
+  //       const impact = parseFloat(seg.impact ? seg.impact : '0').toFixed(3)
+  //       const label = `$${seg.dstUSD},  ${impact}%`
+  //       cy.add({ group: 'edges', 
+  //                 data: { id: _getEdgeId(seg.pairId),
+  //                         source: srcGraphId,
+  //                         target: dstGraphId,
+  //                         label,
+  //                         pairId: seg.pairId,
+  //                         dstUsd: seg.dstUSD,
+  //                         slippage: seg.impact,
+  //                         hop }})
+  //     }
+  //   }
+  // }
+
+  return cy
+}
+
+export const elementDataFromCytoscape = (cyGraph: cytoscape.Core): any =>
+{
+  const elements = cyGraph.elements().jsons()
   const eleDatas = elements.map((ele: any) => { return { data: ele.data } })
-  // log.debug(`eleDatas\n` +
-  //           `--------------------------------------------------------------------------------\n` +
-  //           `${JSON.stringify(eleDatas, null, 2)}\n\n`)
+
   return eleDatas
 }
 
