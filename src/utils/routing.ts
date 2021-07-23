@@ -1,6 +1,6 @@
 import * as ds from './debugScopes'
 import * as t from './types'
-import { WETH_ADDR, USDC_ADDR } from './constants'
+import { WETH_ADDR, USDC_ADDR, WETH_ADDRS_LC } from './constants'
 import { getUpdatedPairData } from './../graphProtocol/uniswapV2'
 import { getIntegerString  } from './misc'
 import { ChainId,
@@ -14,6 +14,8 @@ import { ChainId,
          Fraction} from '@uniswap/sdk'
 import { getAddress } from '@ethersproject/address'
 import JSBI from 'jsbi'
+import cytoscape from 'cytoscape'
+import { v4 as uuidv4 } from 'uuid'
 
 const log = ds.getLog('routing')
 
@@ -62,63 +64,11 @@ const _routeSearch = (g: t.PairGraph,
   }
 }
 
-// Older alg:
-//
-// const _routeSearch = (g: t.PairGraph, 
-//                       hops: number, 
-//                       constraints: t.Constraints,
-//                       route: any, 
-//                       rolledRoutes: t.VFStackedRoutes,
-//                       prevOriginAddr: string,
-//                       originAddr: string, 
-//                       destAddr: string): void => 
-// {
-//   if (constraints.maxDistance && hops < constraints.maxDistance) {
-//     let neighbors = g.neighbors(originAddr)
-//     hops++
-
-//     for (const neighbor of neighbors) {
-//       if (constraints.ignoreTokenIds && constraints.ignoreTokenIds.includes(neighbor)) {
-//         continue
-//       }
-//       if (neighbor === prevOriginAddr) {
-//         continue    // Prevent cycle back to last origin addr (i.e. FEI TRIBE cycle
-//         // of FEI > WETH > FEI > TRIBE)
-//       }
-
-//       // TODO: filter the pairIds of the edge with the constraints.ignorePairIds and then continue
-//       //       constructing the route.
-
-//       // Optimization: rather than make this a mulitgraph, represent all pairs in a single edge and
-//       //               store their ids as a property of that edge.
-//       const _route: any = [...route, { src: originAddr, dst: neighbor, pairIds: g.edge(originAddr, neighbor).pairIds }]
-//       if (neighbor === destAddr) {
-//         rolledRoutes.push(_route)
-//         continue
-//       }
-
-//       if (originAddr !== neighbor) {
-//         _routeSearch(g, 
-//                      hops,
-//                      constraints,
-//                      _route,
-//                      rolledRoutes,
-//                      originAddr,
-//                      neighbor,
-//                      destAddr)
-//       }
-//     }
-//   }
-// }
-
-const _WETH_ADDRS_LC = [ "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",   // The legit one w/ most txns
-                         "0xd73d6d4c463df976399acd80ea338384e247c64b",
-                         "0x477b466750c31c890db3208816d60c8585be7f0e" ]
-export const findRoutes = async(pairGraph: t.PairGraph,
-                                srcAddr: string,
-                                dstAddr: string,
-                                constraints?: t.Constraints,
-                                verbose?: boolean): Promise<t.VFStackedRoutes> =>
+export const findRoutes = (pairGraph: t.PairGraph,
+                           srcAddr: string,
+                           dstAddr: string,
+                           constraints?: t.Constraints,
+                           verbose?: boolean): t.VFStackedRoutes =>
 {
   let rolledRoutes: t.VFStackedRoutes= []
 
@@ -137,7 +87,7 @@ export const findRoutes = async(pairGraph: t.PairGraph,
 
   // Special case: routing from WETH as source, reduce max hops to 1 as this starting node has 30k+
   //               neighbors and doesn't finish in reasonable time.
-  if (_WETH_ADDRS_LC.includes(_srcAddrLC)) {
+  if (WETH_ADDRS_LC.includes(_srcAddrLC)) {
     log.debug(`findRoutes:  detected routing from wETH, reducing max hops to 1.`)
     _constraints.maxDistance = 1
   }
@@ -415,6 +365,107 @@ export const costRoutes = async (allPairData: t.Pairs,
   return costedRoutes
 }
 
+/*
+ * ID for last node in route to allow tree creation.
+ *
+ */
+// let _lastNodeMap: { [index:string]: string } = {}
+const _getLastId = (addr: string): string => 
+{
+  let id = uuidv4()
+  // _lastNodeMap[id] = addr
+  return id
+}
+
+/*
+ * ID to allow directional edges for pair IDs along with lookup
+ * from ID to pairID. 
+ */
+// let _edgeMap: { [index:string]: string } = {}
+const _getEdgeId = (pairId: string): string => 
+{
+  let id = uuidv4()
+  // _edgeMap[id] = pairId
+  return id
+}
+
+export const buildMultipathRoute = (uniData: t.UniData,
+                                    source: string,
+                                    dest: string,
+                                    routes: t.VFRoutes): any =>
+{
+  const cy: cytoscape.Core = cytoscape()
+  annotateRoutesWithSymbols(uniData.tokenData, routes)
+
+  // TODO: fix this comment (dumpster-fireus):
+  //
+  // Construct the trade graph from the top trades, annotating edges with trade
+  // information to make splitting / multipath decisions:
+  // Construct a trade tree--very different from the typical pair tree b/c it
+  // represents the traversal of the pair tree:
+  //
+  //
+  const TOLERANCE = 0.00001
+  for (const route of routes) {
+    for (let segIdx = 0; segIdx < route.length; segIdx++) {
+      const seg = route[segIdx]
+      const hop = segIdx + 1
+      // const existingEdgeObj = subg.edge(seg.src, seg.dst)
+      // if (existingEdgeObj) {
+      //   if (!seg.dstUSD) {
+      //     continue
+      //   }
+      //   if ((parseFloat(seg.dstUSD) - parseFloat(existingEdgeObj.dstUSD)) > TOLERANCE) {
+      //     log.warn(`Algorithm 3 segment collision with mismatched USD amounts.`)
+      //   }
+      // }
+
+      const srcGraphId = `${seg.src}_${hop-1}`
+      if (cy.nodes(`#${srcGraphId}`).length === 0) {
+        cy.add({ group: 'nodes', 
+                  data: { id: srcGraphId, addr: seg.src, label: seg.srcSymbol } })
+      }
+
+      const dstGraphId = (seg.dst !== dest) ? `${seg.dst}_${hop}` : _getLastId(dest)
+      if (cy.nodes(`#${dstGraphId}`).length === 0) {
+        cy.add({ group: 'nodes', 
+                  data: { id: dstGraphId, addr: seg.src, label: seg.dstSymbol } })
+      }
+
+      if (cy.edges(`[source = "${srcGraphId}"][target = "${dstGraphId}"]`).length === 0) {
+        const impact = parseFloat(seg.impact ? seg.impact : '0').toFixed(3)
+        const label = `$${seg.dstUSD},  ${impact}%`
+        cy.add({ group: 'edges', 
+                  data: { id: _getEdgeId(seg.pairId),
+                          source: srcGraphId,
+                          target: dstGraphId,
+                          label,
+                          pairId: seg.pairId,
+                          dstUsd: seg.dstUSD,
+                          slippage: seg.impact,
+                          hop }})
+      }
+    }
+  }
+
+  // log.debug(`cy.elements.jsons()\n` +
+  //           `--------------------------------------------------------------------------------\n` +
+  //           `${JSON.stringify(cy.elements().jsons(), null, 2)}\n\n`)
+  // // log.debug(`cy.edges()\n` +
+  //           `--------------------------------------------------------------------------------\n` +
+  //           `${JSON.stringify(cy.edges(), null, 2)}\n\n`)
+
+  // Need to clean up the graph structure into something that can be costed and
+  // provides sufficient decision making power for costing decisions:
+  //
+  const elements = cy.elements().jsons()
+  const eleDatas = elements.map((ele: any) => { return { data: ele.data } })
+  // log.debug(`eleDatas\n` +
+  //           `--------------------------------------------------------------------------------\n` +
+  //           `${JSON.stringify(eleDatas, null, 2)}\n\n`)
+  return eleDatas
+}
+
 /**
  * To compute a token amount's approx USD value:
  * 
@@ -498,6 +549,21 @@ export const annotateRoutesWithUSD = async (allPairData: t.Pairs,
       }
       if (segment.dstAmount) {
         segment.dstUSD = getEstimatedUSD(allPairData, wethPairDict, segment.dst, segment.dstAmount)
+      }
+    }
+  }
+}
+
+export const annotateRoutesWithSymbols = (tokenData: t.Tokens, 
+                                          routes: t.VFRoutes,
+                                          includeIdLast4: boolean = false): void => {
+  for (const route of routes) {
+    for (const seg of route) {
+      seg.srcSymbol = tokenData.getSymbol(seg.src)
+      seg.dstSymbol = tokenData.getSymbol(seg.dst)
+      if (includeIdLast4) {
+        seg.srcSymbol += ` (${seg.src.substr(seg.src.length-1-4, 4)})`
+        seg.dstSymbol += ` (${seg.dst.substr(seg.dst.length-1-4, 4)})`
       }
     }
   }

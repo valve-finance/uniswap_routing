@@ -94,7 +94,7 @@ export const shell = async(): Promise<void> => {
             maxDistance: _settings["maxHops"].value
           }
           const _stackedRoutes: t.VFStackedRoutes = 
-              await r.findRoutes(_uniData.pairGraph, _payToken, _buyToken, constraints)
+              r.findRoutes(_uniData.pairGraph, _payToken, _buyToken, constraints)
 
           const _routes = r.unstackRoutes(_stackedRoutes)
 

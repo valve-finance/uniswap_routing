@@ -1,9 +1,12 @@
-import { DateTime, Interval, Duration } from 'luxon'
+import * as configJson from '../config.json'
 import * as uniGraphV2 from './../graphProtocol/uniswapV2'
 import * as ds from './debugScopes'
 import * as p from './persistence'
 import * as t from './types'
 import { WETH_ADDR } from './constants'
+
+import { DateTime, Interval, Duration } from 'luxon'
+import { config } from 'dotenv'
 
 const graphlib = require('@dagrejs/graphlib')
 
@@ -15,8 +18,10 @@ const MAX_DATA_AGE = Duration.fromObject({ days: 5 })
 export const initUniData = async(force=false, buildWethPairDict=true): Promise<t.UniData> => {
   log.info('Initializing Uniswap data. Please wait (~ 1 min.) ...')
 
-  const _rawPairData: any = await getPairData({ignorePersisted: force})
-  const _allTokenData: any = await getTokenData({ignorePersisted: force})
+  const ignoreExpiry = (process.env.NODE_ENV !== 'production' &&
+                        configJson.ignore_expired_graph_data)
+  const _rawPairData: any = await getPairData({ignorePersisted: force, ignoreExpiry })
+  const _allTokenData: any = await getTokenData({ignorePersisted: force, ignoreExpiry })
   const _pairGraph: any = await constructPairGraph(_rawPairData)
 
   const uniData: t.UniData = {
@@ -40,9 +45,10 @@ export const initUniData = async(force=false, buildWethPairDict=true): Promise<t
  * TODO:
  *        - Singleton / block multiple calls / make atomic b/c interacting with storage.
  */
-export const getPairData = async(options?: any): Promise<t.Pairs> => {
+const getPairData = async(options?: any): Promise<t.Pairs> => {
   const _defaultOpts = {
     ignorePersisted: false,
+    ignoreExpiry: false,
     persist: true
   }
   const _options = {..._defaultOpts, ...options}
@@ -69,7 +75,8 @@ export const getPairData = async(options?: any): Promise<t.Pairs> => {
     _storedAgeLimitExceeded = _storedInterval.length() > MAX_DATA_AGE.toMillis()
   }
 
-  if (!_allPairs || _storedAgeLimitExceeded) {
+  if (!_allPairs || 
+      (!_options.ignoreExpiry && _storedAgeLimitExceeded)) {
     _allPairs = await uniGraphV2.fetchAllRawPairsV2()
 
     if (_options.persist) {
@@ -80,9 +87,10 @@ export const getPairData = async(options?: any): Promise<t.Pairs> => {
   return _allPairs
 }
 
-export const getTokenData = async(options?: any): Promise<t.Tokens> => {
+const getTokenData = async(options?: any): Promise<t.Tokens> => {
   const _defaultOpts = {
     ignorePersisted: false,
+    ignoreExpiry: false,
     persist: true
   }
   const _options = {..._defaultOpts, ...options}
@@ -109,7 +117,8 @@ export const getTokenData = async(options?: any): Promise<t.Tokens> => {
     _storedAgeLimitExceeded = _storedInterval.length() > MAX_DATA_AGE.toMillis()
   }
 
-  if (!_allTokens || _storedAgeLimitExceeded) {
+  if (!_allTokens ||
+      (!_options.ignoreExpiry && _storedAgeLimitExceeded)) {
     _allTokens = await uniGraphV2.fetchAllTokensV2()
 
     if (_options.persist) {
@@ -120,7 +129,7 @@ export const getTokenData = async(options?: any): Promise<t.Tokens> => {
   return _allTokens
 }
 
-export const constructPairGraph = async(allPairData: t.Pairs): Promise<t.PairGraph> =>
+const constructPairGraph = async(allPairData: t.Pairs): Promise<t.PairGraph> =>
 {
   const _g: t.PairGraph = new graphlib.Graph({directed: false,
                                               multigraph: false,   // Explain optimization here (attach array of pair ids for traversal speed)
@@ -179,7 +188,7 @@ export const constructPairGraph = async(allPairData: t.Pairs): Promise<t.PairGra
  * @param allPairData 
  * @returns 
  */
-export const buildWethPairLookup = (allPairData: t.Pairs): t.WethPairIdDict => {
+const buildWethPairLookup = (allPairData: t.Pairs): t.WethPairIdDict => {
   const wethPairLookup: t.WethPairIdDict = {}
 
   for (const pairId of allPairData.getPairIds()) {

@@ -66,7 +66,7 @@ export const report = async(minLiquidityUSD=10000,
       const resultKey = `${srcTokenIdLC}-${dstTokenIdLC}`
       if (!routeResults.hasOwnProperty(resultKey)) {
         const startMS = Date.now()
-        const _routes = await r.findRoutes(_uniData.pairGraph, srcTokenIdLC, dstTokenIdLC, c.noHubTokenCnstr)
+        const _routes = r.findRoutes(_uniData.pairGraph, srcTokenIdLC, dstTokenIdLC, c.noHubTokenCnstr)
         const durationMS = Date.now() - startMS
         routeTimeSumMS += durationMS
         routeAttemptCount++

@@ -5,9 +5,16 @@ import * as r from './utils/routing'
 const log = ds.getLog('routeCache')
 
 
-export interface RouteOption {
+export interface RouteOptionArg {
+  forceUpdate?: boolean,
+  maxAgeMs?: number,
+  maxHops?: number
+}
+
+interface RouteOption {
   forceUpdate: boolean,
-  maxAgeMs: number
+  maxAgeMs: number,
+  maxHops: number
 }
 
 interface RouteCacheEntry {
@@ -41,13 +48,17 @@ export class RouteCache {
 
   public async getRoutes(srcId: string,
                          dstId: string,
-                         options?: RouteOption): Promise<t.VFRoutes>
+                         options: RouteOptionArg = {}): Promise<t.VFRoutes>
   {
-    const defaultRCOptions: RouteOption = {
-      forceUpdate: false,
-      maxAgeMs: 0
+    // TODO: find a better typescript pattern for methods w/ optional args etc.
+    //       - right now there's two types being used to get around the can't assign
+    //         to undefined mess.
+    //
+    const _options: RouteOption = {
+      forceUpdate: options.forceUpdate !== undefined ? options.forceUpdate : false,
+      maxAgeMs: options.maxAgeMs !== undefined ? options.maxAgeMs : 0,
+      maxHops: options.maxHops !== undefined ? options.maxHops : 0
     }
-    const _options = {...defaultRCOptions, ...options}
 
     const start = Date.now()
     const key = RouteCache.getCacheKey(srcId, dstId)
@@ -56,10 +67,10 @@ export class RouteCache {
     if (!routesEntry ||
         _options.forceUpdate ||
         RouteCache._routesTooOld(routesEntry, _options.maxAgeMs)) {
-      const stackedRoutes: t.VFStackedRoutes = await r.findRoutes(this._pairGraph,
-                                                                  srcId,
-                                                                  dstId,
-                                                                  this._routeConstraints)
+      const stackedRoutes: t.VFStackedRoutes = r.findRoutes(this._pairGraph,
+                                                            srcId,
+                                                            dstId,
+                                                            this._routeConstraints)
       const routes: t.VFRoutes = r.unstackRoutes(stackedRoutes)
 
       const newRouteEntry = {
@@ -71,7 +82,17 @@ export class RouteCache {
     }
 
     // log.debug(`getRoutes: returned ${routesEntry.routes.length} routes in ${Date.now()-start} ms`)
-    return routesEntry.routes
+    if (_options.maxHops) {
+      const _filteredRoutes: t.VFRoutes = []
+      for (const _route of routesEntry.routes) {
+        if (_route.length <= _options.maxHops) {
+          _filteredRoutes.push(_route)
+        }
+      }
+      return _filteredRoutes
+    } else {
+      return routesEntry.routes
+    }
   }
 
   public setPairGraph(pairGraph: t.PairGraph)

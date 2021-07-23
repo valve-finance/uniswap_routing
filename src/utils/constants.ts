@@ -9,14 +9,29 @@ export const INTERNAL_SERVER_ERROR = 500
 export const MAX_HOPS = 3
 export const MAX_RESULTS = 100
 
-export const WETH_ADDR = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+export const WETH_ADDR = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"       // The legit one w/ most txns
 export const USDC_ADDR = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+
+export const WETH_ADDRS_LC = [WETH_ADDR,
+                              "0xd73d6d4c463df976399acd80ea338384e247c64b",
+                              "0x477b466750c31c890db3208816d60c8585be7f0e" ]
+
+// Addresses for testing:
+//
+export const tokenAddrs = {
+  DAI: '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+  COMP: '0xc00e94Cb662C3520282E6f5717214004A7f26888',
+  MCB: '0x4e352cf164e64adcbad318c3a1e222e9eba4ce42',
+  DYP: '0x961c8c0b1aad0c0b10a51fef6a867e3091bcef17',
+  AAVE: '0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9',
+  BAL: '0xba100000625a3754423978a60c9317c58a424e3d'
+}
 
 export const noHubTokenCnstr: t.Constraints = {
   maxDistance: MAX_HOPS,
   ignoreTokenIds: [
     // WETH:
-    WETH_ADDR,                                      // The legit one w/ most txns
+    WETH_ADDR,                                      
     "0xd73d6d4c463df976399acd80ea338384e247c64b",
     "0x477b466750c31c890db3208816d60c8585be7f0e",
     // DAI:

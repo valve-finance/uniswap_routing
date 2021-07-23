@@ -1,6 +1,6 @@
 import 'dotenv/config.js'
 import { Command, parse } from 'commander'
-import { test } from './commands/test'
+import { test, testSimpleMultipath } from './commands/test'
 import { report } from './commands/report'
 import { shell } from './commands/shell'
 import { server } from './commands/server'
@@ -13,6 +13,18 @@ program
   .description('Starts an test of the Uniswap optimizing router, fetching continous updates,' +
                ' of swap statistics, and serving Swap API requests.')
   .action(test)
+
+program
+  .command('testSimpleMultipath [amount]')
+  .description('Tests a simple multipath algorithm on static data between two tokens, with an' +
+                'optionally specified initial amount (default is 1000.0)')
+  .action(async (amount: string) => {
+    let _amount = parseFloat(amount)
+    if (isNaN(_amount)) {
+      amount = '1000.0'
+    }
+    testSimpleMultipath(amount)
+  })
 
 const MIN_LIQUIDITY = 100000
 const MIN_TOKEN_RESERVES = 1000

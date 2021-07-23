@@ -141,19 +141,13 @@ export const server = async(port: string): Promise<void> => {
           result.error = sanitizeStr
           log.debug(sanitizeStr)
         } else {
-          const _routes = await _routeCache.getRoutes(source, dest)
-
-          // TODO: consider pushing the filtering below into the routeCache
-          const _filteredRoutes: t.VFRoutes = []
-          for (const _route of _routes) {
-            if (_route.length <= _options.max_hops.value) {
-              _filteredRoutes.push(_route)
-            }
-          }
+          const _routes = await _routeCache.getRoutes(source,
+                                                      dest,
+                                                      { maxHops: _options.max_hops.value })
 
           const _costedRoutes: t.VFRoutes = await r.costRoutes(_uniData.pairData,
                                                                _uniData.tokenData,
-                                                               _filteredRoutes,
+                                                               _routes,
                                                                amount,
                                                                _options.max_impact.value)
           // log.debug(`Costed routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
