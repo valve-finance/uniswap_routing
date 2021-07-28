@@ -2,7 +2,7 @@ import * as ds from './debugScopes'
 import * as t from './types'
 import { WETH_ADDR, USDC_ADDR, WETH_ADDRS_LC } from './constants'
 import { getUpdatedPairData } from './../graphProtocol/uniswapV2'
-import { getIntegerString, getSpaces } from './misc'
+import { getIntegerString, getSpaces, deepCopy } from './misc'
 import { ChainId,
          Token,
          WETH,
@@ -14,9 +14,9 @@ import { ChainId,
          Fraction} from '@uniswap/sdk'
 import { getAddress } from '@ethersproject/address'
 import JSBI from 'jsbi'
+import { v4 as uuidv4 } from 'uuid'
 import cytoscape from 'cytoscape'
 import crawl from 'tree-crawl'
-import { v4 as uuidv4 } from 'uuid'
 
 const log = ds.getLog('routing')
 
@@ -366,52 +366,96 @@ export const costRoutes = async (allPairData: t.Pairs,
   return costedRoutes
 }
 
-/*
- * ID for last node in route to allow tree creation.
- *
- */
-// let _lastNodeMap: { [index:string]: string } = {}
-const _getLastId = (addr: string): string => 
-{
-  let id = uuidv4()
-  // _lastNodeMap[id] = addr
-  return id
-}
-
-/*
- * ID to allow directional edges for pair IDs along with lookup
- * from ID to pairID. 
- */
-// let _edgeMap: { [index:string]: string } = {}
-const _getEdgeId = (pairId: string): string => 
-{
-  let id = uuidv4()
-  // _edgeMap[id] = pairId
-  return id
-}
-
 export interface TradeTreeNode {
   value: {
-    uuid: string,
+    id: string,
     address: string,
     symbol?: string,
     amount?: string,
     amountUSD?: string
     pairId?: string,
     impact?: string,
+    // gainToDest?: { <routeId>: <gainToDest>, <routeId>: <gainToDest>, ... }
+    gainToDest?: {
+      [index: string]: number 
+    }
+    // trades?: { <tradeId>: <tradeObj> }
+    trades?: any 
   },
-  // parent?: TradeTreeNode,
+  parent?: TradeTreeNode,
   children: TradeTreeNode[]
 }
 
-export const buildTradeTree = (uniData: t.UniData,
-                               source: string,
-                               dest: string,
-                               routes: t.VFRoutes): TradeTreeNode | undefined =>
+const _pruneTreeRoute = (node: TradeTreeNode, routeId: string, nodesToDelete: TradeTreeNode[]): void => {
+  for (const childNode of node.children) {
+    _pruneTreeRoute(childNode, routeId, nodesToDelete)
+  }
+  if (node.value.gainToDest && node.value.gainToDest.hasOwnProperty(routeId)) {
+    delete node.value.gainToDest[routeId]
+
+    if (Object.keys(node.value.gainToDest).length === 0) {
+      nodesToDelete.push(node)
+    }
+  }
+}
+
+export const pruneTreeRoute = (rootNode: TradeTreeNode, routeId: string): void =>
+{
+  const nodesToDelete: TradeTreeNode[] = []
+  _pruneTreeRoute(rootNode, routeId, nodesToDelete)
+
+  for (const node of nodesToDelete) {
+    if (node.parent && node.parent.children) {
+      let nodeIndex = node.parent.children.indexOf(node)
+      node.parent.children.splice(nodeIndex, 1)
+      node.parent = undefined
+    }
+  }
+}
+
+const _getTreeRoutePath = (node: TradeTreeNode, routeId: string, path: string[]): void =>
+{
+  let pathNode: TradeTreeNode | undefined = undefined
+  for (const childNode of node.children) {
+    if (childNode.value.gainToDest) {
+      const { gainToDest } = childNode.value
+      if (gainToDest.hasOwnProperty(routeId)) {
+        pathNode = childNode
+        break
+      }
+    }
+  }
+  
+  if (pathNode) {
+    // Add the symbol of the incoming node as we've found a child with the specified
+    // route ID:
+    const symbol = (node.value.symbol) ? node.value.symbol : '<unknown>'
+    path.push(symbol)
+
+    _getTreeRoutePath(pathNode, routeId, path)
+  } else if (path.length > 0) {
+    // Special case, if we've added symbols and we're at the end of the path,
+    // add the last symbol to show the complete path through to destination (destination
+    // will have no children with routeId in gainToDest):
+    const symbol = (node.value.symbol) ? node.value.symbol : '<unknown>'
+    path.push(symbol)
+  }
+}
+
+export const getTreeRoutePath = (rootNode: TradeTreeNode, routeId: string): string[] =>
+{
+  const path: string[] = []
+  _getTreeRoutePath(rootNode, routeId, path)
+  return path
+}
+
+export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
 {
   let tradeTree: TradeTreeNode | undefined = undefined
 
-  for (const route of routes) {
+  let _eleIdCounter = 0
+  for (let routeIdx = 0; routeIdx < routes.length; routeIdx++) {
+    const route: t.VFRoute = routes[routeIdx]
 
     // Each route is a single path, so we keep track of the
     // tree node we're inserting into as we iterate:
@@ -426,7 +470,7 @@ export const buildTradeTree = (uniData: t.UniData,
       if (!node) {
         tradeTree = {
           value: {
-            uuid: uuidv4(),
+            id: _eleIdCounter.toString(),
             address: seg.src,
             symbol: seg.srcSymbol,
             amount: seg.srcAmount,
@@ -434,6 +478,7 @@ export const buildTradeTree = (uniData: t.UniData,
           },
           children: []
         }
+        _eleIdCounter++
 
         node = tradeTree
       } else if (node === tradeTree /* root node */ && 
@@ -453,44 +498,110 @@ export const buildTradeTree = (uniData: t.UniData,
       if (!dstNode) {
         dstNode = {
           value: {
-            uuid: uuidv4(),
+            id: _eleIdCounter.toString(),
             address: seg.dst,
             symbol: seg.dstSymbol,
             amount: seg.dstAmount,
             amountUSD: seg.dstUSD,
             pairId: seg.pairId,
-            impact: seg.impact
+            impact: seg.impact,
+            gainToDest: {}
           },
-          // parent: node,
+          parent: node,
           children: []
         }
+        _eleIdCounter++
         node.children.push(dstNode)
+      }
+      if (dstNode.value.gainToDest !== undefined) {
+        dstNode.value.gainToDest[routeIdx] = (seg.gainToDest === undefined) ? 0.0 : seg.gainToDest
       }
       node = dstNode
     }
   }
 
-  console.log(`Trade Tree\n` +
-              `================================================================================`)
-  crawl(tradeTree,
-        (node, context) => {
-          console.log(getSpaces(2* context.level) + (node ? node.value.symbol : ''))
-        },
-        { order: 'pre'})
+  // console.log(`Trade Tree\n` +
+  //             `================================================================================`)
+  // crawl(tradeTree,
+  //       (node, context) => {
+  //         console.log(getSpaces(2* context.level) + (node ? node.value.symbol : ''))
+  //       },
+  //       { order: 'pre'})
 
   return tradeTree
 }
 
+const _cloneTradeTree = (node: TradeTreeNode, clone: TradeTreeNode, exact: boolean): void => {
+  for (const childNode of node.children) {
+    // Any types to allow for-loop based conditional assignment of cloned props below.
+    //
+    const _childNode: any = childNode
+    let _childClone: any = {
+      value: {
+        id: exact ? childNode.value.id : uuidv4(),
+        address: childNode.value.address
+      },
+      children: [],
+      parent: clone
+    }
+    const objProps = ['gainToDest', 'trades']
+    for (const key of ['symbol', 'amount', 'amountUSD', 'pairId', 'impact', ...objProps]) {
+      if (_childNode.value.hasOwnProperty(key)) {
+        _childClone.value[key] = (objProps.includes(key)) ?
+          deepCopy(_childNode.value[key]) : _childNode.value[key]
+      }
+    }
+    clone.children.push(_childClone)
+
+    _cloneTradeTree(_childNode, _childClone, exact)
+  }
+}
+
+export const cloneTradeTree = (root: TradeTreeNode, exact: boolean = false): TradeTreeNode | undefined =>
+{
+  // Any types to allow for-loop based conditional assignment of cloned props below.
+  //
+  const _root: any = root
+  const _clone: any = {
+    value: {
+      id: exact ? root.value.id : uuidv4(),
+      address: root.value.address
+    },
+    children: []
+  }
+  const objProps = ['gainToDest', 'trades']
+  for (const key of ['symbol', 'amount', 'amountUSD', 'pairId', 'impact', ...objProps]) {
+    if (_root.value.hasOwnProperty(key)) {
+      _clone.value[key] = (objProps.includes(key)) ?
+        deepCopy(_root.value[key]) : _root.value[key]
+    }
+  }
+
+  _cloneTradeTree(root, _clone, exact)
+  return _clone 
+}
+
 // Useful for visualizing in our web client
 //
-export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode): cytoscape.Core =>
+export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode, useUuid=false): cytoscape.Core =>
 {
+  let _cyEleId = 0
+  let uuidLookup: any = {}
   const cy: cytoscape.Core = cytoscape()
   crawl(tradeTree,
         (node, context) => {
           if (node) {
+            const nodeId = node.value.id
+            let cyNodeId = nodeId
+            if (useUuid) {
+              if (!uuidLookup.hasOwnProperty(nodeId)) {
+                uuidLookup[nodeId] = uuidv4()
+              }
+              cyNodeId = uuidLookup[nodeId]
+            }
+
             const nodeData = {
-              id: node.value.uuid,
+              id: `n_${cyNodeId}`,
               addr: node.value.address,
               label: `${node.value.symbol} ($${node.value.amountUSD})`
             }
@@ -504,16 +615,37 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode): cytoscape.Core =>
               const impact = parseFloat(node.value.impact ? node.value.impact : '0').toFixed(3)
               // const label = `$${node.value.amountUSD},  ${impact}%`
               const label = `${impact}%`
+
+              let parentNodeId = parent.value.id
+              let targetNodeId = node.value.id
+              let edgeId = _cyEleId.toString()
+              let cyParentNodeId = parentNodeId
+              let cyTargetNodeId = targetNodeId
+              let cyEdgeId = edgeId
+              if (useUuid) {
+                for (const id of [parentNodeId, targetNodeId, edgeId]) {
+                  if (!uuidLookup.hasOwnProperty(id)) {
+                    uuidLookup[id] = uuidv4()
+                  }
+                }
+                cyParentNodeId = uuidLookup[parentNodeId]
+                cyTargetNodeId = uuidLookup[targetNodeId]
+                cyEdgeId = uuidLookup[edgeId]
+              }
+
               const edgeData = { 
-                id: uuidv4(),
+                id: `e_${cyEdgeId}`,
                 label,
-                source: parent.value.uuid,
-                target: node.value.uuid,
+                source: `n_${cyParentNodeId}`,
+                target: `n_${cyTargetNodeId}`,
                 pairId: node.value.pairId,
                 dstUsd: node.value.amountUSD,
                 slippage: node.value.impact,
+                gainToDest: node.value.gainToDest,
+                trades: node.value.trades,
                 hop: context.level - 1
                 }
+              _cyEleId++
               cy.add({ group: 'edges', data: edgeData })
             }
           }
@@ -521,62 +653,337 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode): cytoscape.Core =>
         { order: 'pre'} )
 
   return cy
-  // // To make a tree where only common segments from the start of the trade
-  // // are shared, the following must be true for each dest node:
-  // //    1. dest nodes must share the same source node
-  // //    2. 
-  // // TODO: fix this comment (dumpster-fireus):
-  // //
-  // // Construct the trade graph from the top trades, annotating edges with trade
-  // // information to make splitting / multipath decisions:
-  // // Construct a trade tree--very different from the typical pair tree b/c it
-  // // represents the traversal of the pair tree:
-  // //
-  // //
-  // const TOLERANCE = 0.00001
-  // for (const route of routes) {
-  //   for (let segIdx = 0; segIdx < route.length; segIdx++) {
-  //     const seg = route[segIdx]
-  //     const hop = segIdx + 1
-  //     // const existingEdgeObj = subg.edge(seg.src, seg.dst)
-  //     // if (existingEdgeObj) {
-  //     //   if (!seg.dstUSD) {
-  //     //     continue
-  //     //   }
-  //     //   if ((parseFloat(seg.dstUSD) - parseFloat(existingEdgeObj.dstUSD)) > TOLERANCE) {
-  //     //     log.warn(`Algorithm 3 segment collision with mismatched USD amounts.`)
-  //     //   }
-  //     // }
+}
 
-  //     const srcGraphId = `${seg.src}_${hop-1}`
-  //     if (cy.nodes(`#${srcGraphId}`).length === 0) {
-  //       cy.add({ group: 'nodes', 
-  //                 data: { id: srcGraphId, addr: seg.src, label: seg.srcSymbol } })
-  //     }
+const _getTradeId = (tradeIds: string[]): string => {
+  let id = 0
+  for (const tradeIdStr of tradeIds) {
+    const tradeId = parseInt(tradeIdStr)
+    if (tradeId > id) {
+      id = tradeId
+      id++
+    }
+  }
+  return id.toString()
+}
 
-  //     const dstGraphId = (seg.dst !== dest) ? `${seg.dst}_${hop}` : _getLastId(dest)
-  //     if (cy.nodes(`#${dstGraphId}`).length === 0) {
-  //       cy.add({ group: 'nodes', 
-  //                 data: { id: dstGraphId, addr: seg.src, label: seg.dstSymbol } })
-  //     }
+interface TradeProportion {
+  proportion?: number,
+  maxGainToDest: number,
+  node: TradeTreeNode
+}
+type TradeProportions = TradeProportion[]
 
-  //     if (cy.edges(`[source = "${srcGraphId}"][target = "${dstGraphId}"]`).length === 0) {
-  //       const impact = parseFloat(seg.impact ? seg.impact : '0').toFixed(3)
-  //       const label = `$${seg.dstUSD},  ${impact}%`
-  //       cy.add({ group: 'edges', 
-  //                 data: { id: _getEdgeId(seg.pairId),
-  //                         source: srcGraphId,
-  //                         target: dstGraphId,
-  //                         label,
-  //                         pairId: seg.pairId,
-  //                         dstUsd: seg.dstUSD,
-  //                         slippage: seg.impact,
-  //                         hop }})
-  //     }
-  //   }
+const _getTradeProportions = (startNode: TradeTreeNode): TradeProportions => {
+  const tradeProportions: TradeProportions = []
+
+  if (startNode.children.length === 1) {
+    // Special Case: 1 child
+    //
+    const childNode = startNode.children[0]
+    let maxGainToDest = 0.0
+    if (childNode.value.gainToDest) {
+      for (const routeId in childNode.value.gainToDest) {
+        const gainToDest = childNode.value.gainToDest[routeId]
+        if (gainToDest > maxGainToDest) {
+          maxGainToDest = gainToDest
+        }
+      }
+    }
+
+    tradeProportions.push({
+      proportion: 1.0,
+      maxGainToDest,
+      node: startNode.children[0]
+    })
+  } else {
+    // Generic case: > 1 children
+    //
+    for (const childNode of startNode.children) {
+      let maxGainToDest = 0.0
+      if (childNode.value.gainToDest) {
+        for (const routeId in childNode.value.gainToDest) {
+          const gainToDest = childNode.value.gainToDest[routeId]
+          if (gainToDest > maxGainToDest) {
+            maxGainToDest = gainToDest
+          }
+        }
+      }
+
+      tradeProportions.push({
+        proportion: undefined,
+        maxGainToDest,
+        node: childNode
+      })
+    }
+
+    // Check for special case where maxGainToDest exceeds 1.0 and route entirely
+    // to this path:
+    //
+    let unityGainExceedIndex = -1
+    let maxGainBeyondUnity = 0.0
+    tradeProportions.forEach((value: TradeProportion, index: number) => {
+      if (value.maxGainToDest > 1.0 && value.maxGainToDest > maxGainBeyondUnity) {
+        maxGainBeyondUnity = value.maxGainToDest
+        unityGainExceedIndex = index
+      }
+    })
+    if (unityGainExceedIndex >= 0) {
+      const tradeProp = tradeProportions[unityGainExceedIndex]
+      log.warn(`Found trade with gain exceeding unity (${tradeProp.maxGainToDest}).\n`)
+      // TODO: expand this warning (crawl the route and present the path and pair IDs)
+      tradeProportions.forEach((value: TradeProportion, index: number) => {
+        value.proportion = (index === unityGainExceedIndex) ? 1.0 : 0.0
+      })
+    } else {
+      // Generic case where all gainToDest < 1.0:
+      //
+      //   Algorithm attenuates each gain exponentially by it's distance from unity cubed
+      //   and then normalizes the attenuated values to provide a set of proportions summing
+      //   to unity. This accounts for the slippage in the Uniswap V2 constant product formula
+      //   but will required further tuning for optimal results as well as appropriate considerations
+      //   for fixed precision arithmetic (r/n in the prototyping phase, we're working around
+      //   the time required to do so using doubles).
+      //
+      tradeProportions.map((ele: any) => {
+        // Not better on or USDC -> WETH 10M test case (needed to delegate more):
+        // ele.proportion = ele.maxGainToDest * ele.maxGainToDest * ele.maxGainToDest
+        // ele.proportion = ele.maxGainToDest * ele.maxGainToDest
+        ele.proportion = ele.maxGainToDest * ele.maxGainToDest * ele.maxGainToDest * ele.maxGainToDest
+      })
+      let proportionSum = 0
+      for (const ele of tradeProportions) {
+        if (ele.proportion) {
+          proportionSum += ele.proportion
+        }
+      }
+      tradeProportions.map((ele: any) => {
+        ele.proportion = ele.proportion / proportionSum
+      })
+    }
+  }
+
+  return tradeProportions
+}
+
+// TODO:
+//    1. Finite precision effects w/ doubles used below (arb integers and fraction model)
+//    2. Update pair data
+//
+export const costTradeTree = async(allPairData: t.Pairs,
+                                   tokenData: t.Tokens,
+                                   amount: string,
+                                   rootNode: TradeTreeNode,
+                                   updatePairData: boolean = true):Promise<void> =>
+{
+  // TODO - TODO: handle updatePairData
+
+  // Generate a schedule of functions to visit for costing (can't use async/await with
+  // crawl unfortunately.)
+  //
+  // bfsVisitSchedule:
+  // {
+  //   <level>: [ <TradeTreeNode>, <TradeTreeNode>, ...]
+  //   ...
   // }
+  let lastLevel = 0
+  const bfsVisitSchedule: { [index: string]: TradeTreeNode[] } = {}
+  crawl(rootNode,
+        (node, context) => {
+          if (!bfsVisitSchedule.hasOwnProperty(context.level)) {
+            bfsVisitSchedule[context.level] = []
+            if (context.level > lastLevel) {
+              lastLevel = context.level
+            }
+          }
+          bfsVisitSchedule[context.level].push(node)
+        },
+        { order: 'bfs'})
+  
+  let tradeId: string | undefined = undefined
+  for (const level in bfsVisitSchedule) {
+    const nodesAtLevel = bfsVisitSchedule[level]
 
-  return cy
+    if (level === '1') {
+      // Special Case:  1st level
+      //
+      if (nodesAtLevel.length !== 1) {
+        throw Error(`costTradeTree: expected one node at level 1 (root), found ${nodesAtLevel.length}.`)
+      }
+
+      //    - annotate the root node trades object with the 
+      //      tradeId, inputAmount, outputAmount:
+      //
+      const node = nodesAtLevel[0]
+      if (!node.value.hasOwnProperty('trades')) {
+        node.value.trades = {}
+      }
+      const { trades } = node.value
+      tradeId = _getTradeId(Object.keys(trades))
+      trades[tradeId] = {
+        inputAmount: amount,
+        outputAmount: amount,
+        proportion: 1.0
+      }
+    
+      //    - determine the split to route the trade between
+      //      multiple children
+      //
+      const tradeProportions: TradeProportions = _getTradeProportions(node)
+
+      for (const tradeProp of tradeProportions) {
+        const childNode = tradeProp.node
+        const proportion = (tradeProp.proportion === undefined) ? 0 : tradeProp.proportion
+
+        // The input amount to all children is the output amount of their parent node:
+        let inputAmount = 0.0
+        if (childNode.parent && 
+            childNode.parent.value.hasOwnProperty('trades') &&
+            childNode.parent.value.trades.hasOwnProperty(tradeId)) {
+          // TODO:
+          //  - need a better solution to this for numerical precision (i.e. arbitrary
+          //    integer fraction model)
+          inputAmount = proportion * parseFloat(childNode.parent.value.trades[tradeId].outputAmount)
+        } else {
+          throw Error(`costTradeTree: expected parent tree node to have trades with tradeId ${tradeId}\n` +
+                      `parent:\n${JSON.stringify(childNode.parent ? childNode.parent.value : undefined, null, 2)}`)
+        }
+
+        //    - annotate the children node trades object with
+        //      the tradeId, inputAmount 
+        if (!childNode.value.hasOwnProperty('trades')) {
+          childNode.value.trades = {}
+        }
+        const { trades } = childNode.value
+        
+        if (!trades.hasOwnProperty(tradeId)) {
+          trades[tradeId] = {}
+        }
+        const trade = trades[tradeId]
+        trade.proportion = proportion
+        trade.inputAmount = inputAmount
+
+        //    - perform costing and annotate the children node trades with
+        //      the outputAmount 
+        const pairId = childNode.value.pairId
+        if (!pairId) {
+          throw Error(`costTradeTree: pair not specified on tree node.\n` +
+                      `${JSON.stringify(childNode.value, null, 2)}`)
+        }
+        const pairData = allPairData.getPair(pairId)
+        let estimate: any = undefined
+        try {
+          estimate = computeTradeEstimates(
+            pairData, tokenData, childNode.parent.value.address, inputAmount.toString())
+        } catch (estimateError) {
+          throw new Error(`costTradeTree: failed cost estimate.\n` +
+                          `node: ${JSON.stringify(childNode.value, null, 2)}\n` +
+                          `parent: ${JSON.stringify(childNode.parent.value, null, 2)}\n` +
+                          `${estimateError}`)
+        }
+
+        trade.impact = estimate.trade.priceImpact.toSignificant(18)
+        trade.inputAmountP = estimate.trade.inputAmount.toExact()
+        trade.outputAmount = estimate.trade.outputAmount.toExact()
+      }
+    } else if (level === lastLevel.toString()) {
+      // Special Case (the best kind):  last level, do nothing
+      //
+    } else {
+      for (const node of nodesAtLevel) {
+        // A close replica of the previous conditional branch <-- TODO: refactor
+        //
+        //    - determine the split to route the trade between
+        //      multiple children
+        //
+        const tradeProportions: TradeProportions = _getTradeProportions(node)
+
+        for (const tradeProp of tradeProportions) {
+          const childNode = tradeProp.node
+          const proportion = (tradeProp.proportion === undefined) ? 0 : tradeProp.proportion
+
+          // The input amount to all children is the output amount of their parent node:
+          let inputAmount = 0.0
+          if (tradeId !== undefined &&
+              childNode.parent && 
+              childNode.parent.value.hasOwnProperty('trades') &&
+              childNode.parent.value.trades.hasOwnProperty(tradeId)) {
+            // TODO:
+            //  - need a better solution to this for numerical precision (i.e. arbitrary
+            //    integer fraction model)
+            inputAmount = proportion * parseFloat(childNode.parent.value.trades[tradeId].outputAmount)
+          } else {
+            throw Error(`costTradeTree: expected parent tree node to have trades with tradeId ${tradeId}\n` +
+                        `parent:\n${JSON.stringify(childNode.parent ? childNode.parent.value : undefined, null, 2)}`)
+          }
+
+          //    - annotate the children node trades object with
+          //      the tradeId, inputAmount 
+          if (!childNode.value.hasOwnProperty('trades')) {
+            childNode.value.trades = {}
+          }
+          const { trades } = childNode.value
+          
+          if (!trades.hasOwnProperty(tradeId)) {
+            trades[tradeId] = {}
+          }
+          const trade = trades[tradeId]
+          trade.proportion = proportion
+          trade.inputAmount = inputAmount
+
+          //    - perform costing and annotate the children node trades with
+          //      the outputAmount 
+          const pairId = childNode.value.pairId
+          if (!pairId) {
+            throw Error(`costTradeTree: pair not specified on tree node.\n` +
+                        `${JSON.stringify(childNode.value, null, 2)}`)
+          }
+          const pairData = allPairData.getPair(pairId)
+          let estimate: any = undefined
+          try {
+            estimate = computeTradeEstimates(
+              pairData, tokenData, childNode.parent.value.address, inputAmount.toString())
+          } catch (estimateError) {
+            throw new Error(`costTradeTree: failed cost estimate.\n` +
+                            `node: ${JSON.stringify(childNode.value, null, 2)}\n` +
+                            `parent: ${JSON.stringify(childNode.parent.value, null, 2)}\n` +
+                            `${estimateError}`)
+          }
+
+          trade.impact = estimate.trade.priceImpact.toSignificant(18)
+          trade.inputAmountP = estimate.trade.inputAmount.toExact()
+          trade.outputAmount = estimate.trade.outputAmount.toExact()
+        }
+      }
+    }
+  }
+}
+
+export const annotateTradeTreeWithUSD = async (allPairData: t.Pairs,
+                                               wethPairDict: t.WethPairIdDict,
+                                               rootNode: TradeTreeNode,
+                                               updatePairData: boolean=true): Promise<void> =>
+{
+  // TODO - TODO: handle updatePairData
+  crawl(rootNode,
+        (node, context) => {
+          if (node.value.trades) {
+            for (const tradeId in node.value.trades) {
+              const trade = node.value.trades[tradeId]
+              if (node.parent) {
+                trade.inputUsd = getEstimatedUSD(allPairData,
+                                                 wethPairDict,
+                                                 node.parent.value.address,
+                                                 trade.inputAmountP)
+              }
+              trade.outputUsd = getEstimatedUSD(allPairData,
+                                                wethPairDict,
+                                                node.value.address,
+                                                trade.outputAmount)
+            }
+          }
+        },
+        { order: 'bfs' })
 }
 
 export const elementDataFromCytoscape = (cyGraph: cytoscape.Core): any =>
@@ -686,6 +1093,26 @@ export const annotateRoutesWithSymbols = (tokenData: t.Tokens,
         seg.srcSymbol += ` (${seg.src.substr(seg.src.length-1-4, 4)})`
         seg.dstSymbol += ` (${seg.dst.substr(seg.dst.length-1-4, 4)})`
       }
+    }
+  }
+}
+
+export const annotateRoutesWithGainToDest = (routes: t.VFRoutes): void => {
+  /**
+   * Annotate routes with their gain at each segment to final destination.  The gain of one segment to the
+   * the destination is (1 - impact).  The gain through two segments to the destination is (1 - impact_seg1) * (1 - impact_seg2).
+   * If you take the amount in to the trade and multiply it by the gain, you know how much you'll receive at
+   * the completion of the transaction.  The gain to destination is useful in understanding if a multi-segment path
+   * is better than an adjacent path.
+   */
+  for (const route of routes) {
+    let gainToDest: undefined | number = undefined
+    for (let segIdx = route.length - 1; segIdx >= 0; segIdx--) {
+      const seg: t.VFSegment = route[segIdx]
+      const impact = (seg.impact === undefined) ? 0.0 : (parseFloat(seg.impact) / 100.0)
+      const gain = 1.0 - impact
+      gainToDest = (gainToDest === undefined) ? gain : gainToDest * gain
+      seg.gainToDest = gainToDest
     }
   }
 }

@@ -190,6 +190,7 @@ export interface VFSegment {
   dstUSD?: string
   srcSymbol?: string
   dstSymbol?: string
+  gainToDest?: number
 }
 export type VFRoute = VFSegment[]
 export type VFRoutes = VFRoute[]

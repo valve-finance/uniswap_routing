@@ -1,6 +1,7 @@
 import * as ds from './utils/debugScopes'
 import * as t from './utils/types'
 import * as r from './utils/routing'
+import { ENGINE_METHOD_CIPHERS } from 'constants'
 
 const log = ds.getLog('routeCache')
 
@@ -64,6 +65,19 @@ export class RouteCache {
     const key = RouteCache.getCacheKey(srcId, dstId)
     let routesEntry: RouteCacheEntry = this._routeCache.cacheMap[key]
 
+    // Special case - bypass the cache if the specified max hops exceeds that for the
+    //                cache:
+    if (this._routeConstraints.maxDistance &&
+        this._routeConstraints.maxDistance < _options.maxHops) {
+      log.warn(`RouteCache::getRoutes:  Bypassing cache for maxhops specified ${_options.maxHops}`)
+      const constraints = {...this._routeConstraints, ...{maxDistance: _options.maxHops}}
+      const stackedRoutes: t.VFStackedRoutes = r.findRoutes(this._pairGraph,
+                                                            srcId,
+                                                            dstId,
+                                                            constraints)
+      const routes: t.VFRoutes = r.unstackRoutes(stackedRoutes)
+      return routes
+    }
     if (!routesEntry ||
         _options.forceUpdate ||
         RouteCache._routesTooOld(routesEntry, _options.maxAgeMs)) {

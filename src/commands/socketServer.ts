@@ -16,6 +16,8 @@ import requestIp from 'request-ip'
 import socketio from 'socket.io'
 import { v4 as uuidv4 } from 'uuid'
 import cytoscape from 'cytoscape'
+import crawl from 'tree-crawl'
+import { SupportedAlgorithm } from 'ethereum-abi-types-generator/node_modules/ethersv5/lib/utils'
 
 
 // TODO: back with Redis instead of mem
@@ -62,6 +64,14 @@ const _preprocessRouteReq = (source: string,
       min: 0.0,
       max: 100.0,
       type: 'float'
+    },
+    update_data: {
+      value: true,
+      type: 'boolean'
+    },
+    ignore_max_hops: {
+      value: false,
+      type: 'boolean'
     }
   }
 
@@ -77,6 +87,9 @@ const _preprocessRouteReq = (source: string,
           value = parseInt(options[property])
         } else if (propertyParams.type === 'float') {
           value = parseFloat(options[property])
+        } else if (propertyParams.type === 'boolean' && options.hasOwnProperty(property)) {
+          _options[property].value = (options[property] === 'true') ? true : false
+          continue
         }
 
         if (isNaN(value)) {
@@ -84,10 +97,14 @@ const _preprocessRouteReq = (source: string,
           continue
         }
 
-        if (value > propertyParams.max || value < propertyParams.min) {
-          sanitizeStr += `options.${property} must be parsable from a string to a ${propertyParams.type} ` +
-                          `between ${propertyParams.min} and ${propertyParams.max}, inclusive.\n`
-          continue
+        // Special case for max hops--ignore it if specified:
+        if ( !(property === 'max_hops' &&
+               options.hasOwnProperty('ignore_max_hops') && options['ignore_max_hops'] === 'true') ) {
+          if (value > propertyParams.max || value < propertyParams.min) {
+            sanitizeStr += `options.${property} must be parsable from a string to a ${propertyParams.type} ` +
+                            `between ${propertyParams.min} and ${propertyParams.max}, inclusive.\n`
+            continue
+          }
         }
 
         _options[property].value = value
@@ -123,7 +140,12 @@ const _processRouteReq = async(reqType: string,
 
   socket && socket.emit(reqType, { requestId, status: 'Getting price quotes.', })
   const _costedRoutesP: Promise<t.VFRoutes> = 
-      r.costRoutes(uniData.pairData, uniData.tokenData, _routes, amount, options.max_impact.value)
+      r.costRoutes(uniData.pairData, 
+                   uniData.tokenData,
+                   _routes,
+                   amount,
+                   options.max_impact.value,
+                   options.update_data.value)
       .catch(error => {
         // TODO: signal an error in routing to the client
         return []
@@ -143,7 +165,10 @@ const _processRouteReq = async(reqType: string,
   })
   const _requestedCostedRoutes: t.VFRoutes = _costedRoutes.slice(0, options.max_results.value)
   if (uniData.wethPairData) {
-    await r.annotateRoutesWithUSD(uniData.pairData, uniData.wethPairData, _requestedCostedRoutes)
+    await r.annotateRoutesWithUSD(uniData.pairData,
+                                  uniData.wethPairData,
+                                  _requestedCostedRoutes,
+                                  options.update_data.value)
   }
 
   if (options.multipath) {
@@ -209,6 +234,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
     clientSockets[socket.id] = socket
     log.debug(`${socket.id} connected (${Object.keys(clientSockets).length} connections).`)
 
+
     socket.on('route', async (source: string,
                               dest: string,
                               amount: string,
@@ -236,6 +262,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
       log.debug(`Processed request in ${Date.now() - _startMs} ms`)
     })
 
+
     socket.on('multipath', async(source: string,
                                  dest: string,
                                  amount: string,
@@ -260,18 +287,253 @@ export const startSocketServer = async(port: string): Promise<void> => {
       }
       
       _options.multipath = true
+      _options.max_results.value = 100
       const resultObj = await _processRouteReq(reqType, _uniData, _routeCache, socket, requestId, source, dest, amount, _options)
+
+      r.annotateRoutesWithGainToDest(resultObj.routes)
+
+      /**
+       * TODO: before converting routes to a trading tree, filter them based on a minimum gain to dest criteria.
+       */
+
+      /**
+       *  The route analysis object allows us to quickly filter out routes that offer no splitting benefits as well as
+       *  filtering out routes that have high impact pairs further downstream (a later hop) that would impact trade estimates.
+       * 
+       *  Route Analysis Object:
+       *  {
+       *    routes: {
+       *      <id>: {
+       *        route: <route obj>,
+       *        yieldPct: <percentage>,
+       *      }
+       *    },
+       *    pairs: {
+       *      <pairId>: {
+       *        <hop>: [
+       *          { id: <route id>,
+       *            impact: <percentage>
+       *          }
+       *          ...
+       *        ],
+       *        ...
+       *      }
+       *    }
+       *  }
+       */
+      // let _routeIdCounter = 0
+      // const routeAnalysis: any = {
+      //   routes: {},
+      //   pairs: {}
+      // }
+      // const MIN_YIELD_PCT = 20.0
+      // for (const route of resultObj.routes) {
+      //   const firstSeg: t.VFSegment = route[0]
+      //   const lastSeg: t.VFSegment = route[route.length - 1]
+      //   let yieldPct: number = (firstSeg.srcUSD && lastSeg.dstUSD) ? 
+      //     100.0 * (parseFloat(lastSeg.dstUSD) / parseFloat(firstSeg.srcUSD)) : 0.0
+      //   if (yieldPct < MIN_YIELD_PCT) {
+      //     continue
+      //   }
+        
+      //   const routeId = _routeIdCounter++
+      //   routeAnalysis.routes[routeId] = {
+      //     route,
+      //     yieldPct
+      //   }
+
+      //   let hopIdx = 0
+      //   for (const seg of route) {
+      //     hopIdx++
+      //     const { pairId, impact } = seg
+      //     if (!routeAnalysis.pairs.hasOwnProperty(pairId)) {
+      //       routeAnalysis.pairs[pairId] = {}
+      //     }
+      //     if (!routeAnalysis.pairs[pairId].hasOwnProperty(hopIdx)) {
+      //       routeAnalysis.pairs[pairId][hopIdx] = []
+      //     }
+      //     routeAnalysis.pairs[pairId][hopIdx].push({
+      //       id: routeId,
+      //       impact: parseFloat(impact)
+      //     })
+      //   }
+      // }
+      // console.log(`Route analysis:\n` +
+      //             `================================================================================\n` +
+      //             `${JSON.stringify(routeAnalysis, null, 2)}`)
+      
+      // /* Now remove routes that re-use pairs with slippage above a threshold, n, in later route hops.
+      //  * i.e. If route 1 uses pair X in the first hop and route 2 uses pair X in the second hop, exclude
+      //  *      route 2.
+      //  * TODO: this could easily be done with a crawl of the tree and populating a dictionary (realized this
+      //  *       after writing the working code below) for later pruning of routes.
+      //  */
+      // const MAX_SLIPPAGE = 2.0    // Impact
+      // const excludeRoutes: string[] = []
+      // for (const pairId in routeAnalysis.pairs) {
+      //   const pairData = routeAnalysis.pairs[pairId]
+
+      //   // Exclude pairs that are never in more than one hop.
+      //   //
+      //   if (Object.keys(pairData).length <= 1) {
+      //     continue
+      //   }
+
+      //   let firstHop = true
+      //   let maxSlippage = 0.0
+      //   for (let hopIdx = 0; hopIdx <= _options.max_hops.value; hopIdx++) {
+      //     const pairHopData = pairData[hopIdx]
+      //     if (!pairHopData) {
+      //       continue
+      //     }
+      //     // log.debug(`Examining pair:\n${JSON.stringify(pairHopData, null, 2)}`)
+
+      //     for (const pairSegmentData of pairHopData) {
+      //       if (pairSegmentData.impact > maxSlippage) {
+      //         maxSlippage = pairSegmentData.impact
+      //       }
+      //     }
+
+      //     // Don't remove the pair if it's in the first hop we've found using this pair in any of the routes:
+      //     //
+      //     if (firstHop) {
+      //       //    - TODO: special case, pairs in the same hop but with different impacts (implies that they are different
+      //       //            paths).
+      //       //
+      //       firstHop = false
+      //       continue
+      //     }
+
+      //     // Remove routes that feature a pair further down the route that is used earlier and exceeds our
+      //     // slippage threshold:
+      //     //
+      //     if (maxSlippage > MAX_SLIPPAGE) {
+      //       for (const pairSegmentData of pairHopData) {
+      //         excludeRoutes.push(pairSegmentData.id)
+      //       }
+      //     }
+      //   }
+      // }
+      // log.debug(`Removing ${excludeRoutes.length} routes due to high-slippage pairs re-used downstream.\n`)
+      // const filteredRoutes: t.VFRoutes = []
+      // for (const routeId in routeAnalysis.routes) {
+      //   if (excludeRoutes.includes(routeId)) {
+      //     continue
+      //   }
+      //   filteredRoutes.push(routeAnalysis.routes[routeId].route)
+      // }
+
+
+      // r.annotateRoutesWithSymbols(_uniData.tokenData, filteredRoutes)
+      // const tradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(filteredRoutes)
+
+
       r.annotateRoutesWithSymbols(_uniData.tokenData, resultObj.routes)
-      const tradeTree: r.TradeTreeNode | undefined = 
-        r.buildTradeTree(_uniData, source, dest, resultObj.routes)
-      let eleDatas: any = []
-      if (tradeTree) {
-        const cyGraph: cytoscape.Core = r.tradeTreeToCyGraph(tradeTree)
-        eleDatas = r.elementDataFromCytoscape(cyGraph)
+      const tradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(resultObj.routes)
+      const pruneTradeTree: r.TradeTreeNode | undefined = (tradeTree) ? r.cloneTradeTree(tradeTree) : undefined
+      // const pruneTradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(resultObj.routes) 
+ 
+
+      // Prune the trade tree copy to only contain the top n routes:
+      //
+      const n = 20
+      if (pruneTradeTree && pruneTradeTree.children) {
+        const routes: any = []
+        for (const child of pruneTradeTree.children) {
+          const { gainToDest } = child.value
+          if (gainToDest) {
+            for (const key in gainToDest) {
+              routes.push( { routeId: key, totalGain: gainToDest[key] })
+            }
+          }
+        }
+        routes.sort((a: any, b: any) => { return b.totalGain - a.totalGain })   // Descending sort
+
+        const topRoutes: any = routes.splice(0, n)   // don't remove -- mutates routes for prune
+        for (const pruneRoute of routes) {
+          const { routeId, totalGain } = pruneRoute
+          r.pruneTreeRoute(pruneTradeTree, routeId)
+        }
+
+        // log.debug(`Post prune pruneTradeTree:\n` +
+        //           `--------------------------------------------------------------------------------\n`)
+        // let treeStr = ''
+        // let lastLevel: number | undefined = undefined
+        // crawl(pruneTradeTree, 
+        //       (node, context) => {
+        //         if (lastLevel !== context.level) {
+        //           treeStr += '\n'
+        //           lastLevel = context.level
+        //           treeStr += `(${lastLevel}): `
+        //         }
+        //         treeStr += `${(node.value.symbol ? node.value.symbol : '')}, `
+        //       },
+        //       { order: 'bfs'})
+        // log.debug(treeStr)
+      }
+
+      let sum: any= {}
+      const costedTradeTree: r.TradeTreeNode | undefined = (pruneTradeTree) ? 
+          r.cloneTradeTree(pruneTradeTree) : undefined
+      if (costedTradeTree) {
+        await r.costTradeTree(_uniData.pairData,
+                              _uniData.tokenData,
+                              amount,
+                              costedTradeTree,
+                              false /* update pair data */)
+        
+        if (_uniData.wethPairData) {
+          await r.annotateTradeTreeWithUSD(_uniData.pairData,
+                                          _uniData.wethPairData,
+                                          costedTradeTree,
+                                          false /* update pair data */)
+        }
+        // Calculate the total quickly
+        crawl(costedTradeTree,
+              (node, context) => {
+                if (node.children.length === 0) {
+                  if (node.value.trades) {
+                    for (const tradeId in node.value.trades) {
+                      if (!sum.hasOwnProperty(tradeId)) {
+                        sum[tradeId] = 0
+                      }
+                      const trade = node.value.trades[tradeId]
+                      if (trade.outputUsd) {
+                        sum[tradeId] += parseFloat(trade.outputUsd)
+                      }
+                    }
+                  }
+                }
+              },
+              { order: 'pre' })
+      }
+
+      let pages: any = []
+      const useUuid = true
+      if (tradeTree) { 
+        const cyGraph: cytoscape.Core = r.tradeTreeToCyGraph(tradeTree, useUuid)
+        pages.push({
+          description: 'Raw Route Data',
+          elements: r.elementDataFromCytoscape(cyGraph)
+        })
+      }
+      if (pruneTradeTree) {
+        const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(pruneTradeTree, useUuid)
+        pages.push({
+          description: 'Top 2 Routes',
+          elements: r.elementDataFromCytoscape(cyGraphCopy)
+        })
+      }
+      if (costedTradeTree) {
+        const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(costedTradeTree, useUuid)
+        pages.push({
+          description: `Costed Split Across Top n Routes: $${Object.values(sum).join(', ')}`,
+          elements: r.elementDataFromCytoscape(cyGraphCopy)
+        })
       }
       socket.emit('multipath', {
         requestId,
-        elements: eleDatas
+        pages
       })
       log.debug(`Processed request in ${Date.now() - _startMs} ms`)
     })
