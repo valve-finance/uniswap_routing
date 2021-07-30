@@ -8,7 +8,15 @@ const log = ds.getLog('server')
 const { INFURA_API_KEY } = process.env
 const ETH_ADDR = '0xc803698a4be31f0b9035b6eba17623698f3e2f82'
 
-export const getUniRouteV2 = async (source: string, destination: string, amount: string): Promise<string> => {
+export const getUniRouteV2 = async (source: string, destination: string, amount: string): Promise<any> =>
+{
+  const routeObj: any = {
+    uniswapVersion: '',
+    expectedConvertQuote: '',
+    routeText: '',
+    routePath: [],
+    routePathTokenMap: [] 
+  }
   let routeText = ''
   try {
     const settings = new UniswapPairSettings({
@@ -34,11 +42,16 @@ export const getUniRouteV2 = async (source: string, destination: string, amount:
 
     // TODO: probably want to cache this for ~block time (15s)
     const trade = await uniswapPairFactory.trade(amount.toString())
-    routeText = trade.routeText 
+
+    routeObj.uniswapVersion = trade.uniswapVersion
+    routeObj.expectedConvertQuote = trade.expectedConvertQuote    // the amount in dest tokens
+    routeObj.routeText = trade.routeText
+    routeObj.routePath = trade.routePath
+    routeObj.routePathTokenMap = trade.routePathTokenMap
     trade.destroy()
   } catch (error) {
     log.warn(`getUniRouteV2 failed.\n${error}`)
   }
 
-  return routeText
+  return routeObj 
 }

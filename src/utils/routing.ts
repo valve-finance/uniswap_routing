@@ -244,10 +244,6 @@ export const costRoutes = async (allPairData: t.Pairs,
   const costedRoutes: t.VFRoutes = []
   const estimateCache: any = {}
 
-  // Deep copy routes b/c annotating / updating src/dstAmount/USD on them is being
-  // retained when they're pulled from the cache:
-  const _routes = JSON.parse(JSON.stringify(routes))
-
   // Convert the specified double that is maxImpact to a fractional value with reasonable
   // precision:
   // const maxImpactFrac = new Fraction(JSBI.BigInt(Math.floor(maxImpact * 1e18)), JSBI.BigInt(1e18))
@@ -263,7 +259,7 @@ export const costRoutes = async (allPairData: t.Pairs,
    */
   if (updatePairData) {
     const start: number = Date.now()
-    const pairIdsToUpdate: Set<string> = getAllPairsIdsOfAge(allPairData, _routes)
+    const pairIdsToUpdate: Set<string> = getAllPairsIdsOfAge(allPairData, routes)
     const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
     const updateTimeMs = Date.now()
     allPairData.updatePairs(updatedPairs, updateTimeMs)
@@ -277,7 +273,7 @@ export const costRoutes = async (allPairData: t.Pairs,
     entries: 0
   }
 
-  for (const route of _routes) {
+  for (const route of routes) {
     let inputAmount = amount    // This is the value passed in and will be converted
                                 // to an integer representation scaled by n decimal places
                                 // in getIntegerString (as called by computeTradeEstimates)
@@ -366,21 +362,31 @@ export const costRoutes = async (allPairData: t.Pairs,
   return costedRoutes
 }
 
+// See: https://www.w3schools.com/cssref/css_colors.asp
+export const PATH_COLORS: { [index: string]: string } = {
+  DEFAULT: 'LightGray',       // #D3D3D3
+  DEFAULT_EDGE: 'Gainsboro',  // #DCDCDC
+  UNI: 'CornFlowerBlue',      // #1E90FF
+  UNI_EDGE: 'LightBlue'       // $ADD8E6
+}
 export interface TradeTreeNode {
   value: {
     id: string,
     address: string,
+    color: string,
     symbol?: string,
     amount?: string,
     amountUSD?: string
     pairId?: string,
     impact?: string,
+    // Nested Objects:
+    // ---------------
     // gainToDest?: { <routeId>: <gainToDest>, <routeId>: <gainToDest>, ... }
     gainToDest?: {
       [index: string]: number 
     }
     // trades?: { <tradeId>: <tradeObj> }
-    trades?: any 
+    trades?: any,
   },
   parent?: TradeTreeNode,
   children: TradeTreeNode[]
@@ -475,6 +481,7 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
             symbol: seg.srcSymbol,
             amount: seg.srcAmount,
             amountUSD: seg.srcUSD,
+            color: seg.isUni ? PATH_COLORS.UNI : PATH_COLORS.DEFAULT
           },
           children: []
         }
@@ -505,7 +512,8 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
             amountUSD: seg.dstUSD,
             pairId: seg.pairId,
             impact: seg.impact,
-            gainToDest: {}
+            gainToDest: {},
+            color: seg.isUni ? PATH_COLORS.UNI: PATH_COLORS.DEFAULT
           },
           parent: node,
           children: []
@@ -531,54 +539,47 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
   return tradeTree
 }
 
-const _cloneTradeTree = (node: TradeTreeNode, clone: TradeTreeNode, exact: boolean): void => {
-  for (const childNode of node.children) {
+const _cloneTradeTreeNode = (node: TradeTreeNode, exact: boolean): TradeTreeNode =>
+{
     // Any types to allow for-loop based conditional assignment of cloned props below.
     //
-    const _childNode: any = childNode
-    let _childClone: any = {
+    let clone: any = {
       value: {
-        id: exact ? childNode.value.id : uuidv4(),
-        address: childNode.value.address
+        id: exact ? node.value.id : uuidv4(),
+        address: node.value.address,
+        color: node.value.color
       },
       children: [],
-      parent: clone
     }
+
+    // TODO: better way using the type system/TS than listing out props / keys in arr below
+    //
     const objProps = ['gainToDest', 'trades']
+    const nodeAny: any = node
     for (const key of ['symbol', 'amount', 'amountUSD', 'pairId', 'impact', ...objProps]) {
-      if (_childNode.value.hasOwnProperty(key)) {
-        _childClone.value[key] = (objProps.includes(key)) ?
-          deepCopy(_childNode.value[key]) : _childNode.value[key]
+      if (nodeAny.value.hasOwnProperty(key)) {
+        clone.value[key] = (objProps.includes(key)) ?
+          deepCopy(nodeAny.value[key]) : nodeAny.value[key]
       }
     }
-    clone.children.push(_childClone)
+    return clone
+}
 
-    _cloneTradeTree(_childNode, _childClone, exact)
+const _cloneTradeTree = (node: TradeTreeNode, clone: TradeTreeNode, exact: boolean): void => {
+  for (const childNode of node.children) {
+
+    const childClone: TradeTreeNode = _cloneTradeTreeNode(childNode, exact)
+    childClone.parent = clone
+    clone.children.push(childClone)
+    _cloneTradeTree(childNode, childClone, exact)
   }
 }
 
 export const cloneTradeTree = (root: TradeTreeNode, exact: boolean = false): TradeTreeNode | undefined =>
 {
-  // Any types to allow for-loop based conditional assignment of cloned props below.
-  //
-  const _root: any = root
-  const _clone: any = {
-    value: {
-      id: exact ? root.value.id : uuidv4(),
-      address: root.value.address
-    },
-    children: []
-  }
-  const objProps = ['gainToDest', 'trades']
-  for (const key of ['symbol', 'amount', 'amountUSD', 'pairId', 'impact', ...objProps]) {
-    if (_root.value.hasOwnProperty(key)) {
-      _clone.value[key] = (objProps.includes(key)) ?
-        deepCopy(_root.value[key]) : _root.value[key]
-    }
-  }
-
-  _cloneTradeTree(root, _clone, exact)
-  return _clone 
+  const rootClone: TradeTreeNode = _cloneTradeTreeNode(root, exact)
+  _cloneTradeTree(root, rootClone, exact)
+  return rootClone 
 }
 
 // Useful for visualizing in our web client
@@ -600,10 +601,17 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode, useUuid=false): cyt
               cyNodeId = uuidLookup[nodeId]
             }
 
+            const labelTokenAmt = (node.value.amount) ? parseFloat(node.value.amount).toFixed(6) : '0'
             const nodeData = {
               id: `n_${cyNodeId}`,
-              addr: node.value.address,
-              label: `${node.value.symbol} ($${node.value.amountUSD})`
+              address: node.value.address,
+              amount: node.value.amount,
+              amountUSD: node.value.amountUSD,
+              symbol: node.value.symbol,
+              label: `${node.value.symbol}\n` +
+                     `${labelTokenAmt}\n` +
+                     `($${node.value.amountUSD})`,
+              color: `${node.value.color}`
             }
             cy.add({ group: 'nodes', data: nodeData})
 
@@ -615,6 +623,9 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode, useUuid=false): cyt
               const impact = parseFloat(node.value.impact ? node.value.impact : '0').toFixed(3)
               // const label = `$${node.value.amountUSD},  ${impact}%`
               const label = `${impact}%`
+              const color = (parent.value.color === PATH_COLORS.UNI &&
+                             node.value.color === PATH_COLORS.UNI) ? 
+                             PATH_COLORS.UNI_EDGE : PATH_COLORS.DEFAULT_EDGE
 
               let parentNodeId = parent.value.id
               let targetNodeId = node.value.id
@@ -638,13 +649,13 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode, useUuid=false): cyt
                 label,
                 source: `n_${cyParentNodeId}`,
                 target: `n_${cyTargetNodeId}`,
-                pairId: node.value.pairId,
-                dstUsd: node.value.amountUSD,
                 slippage: node.value.impact,
                 gainToDest: node.value.gainToDest,
                 trades: node.value.trades,
-                hop: context.level - 1
-                }
+                pairId: node.value.pairId,
+                hop: context.level - 1,
+                color
+              }
               _cyEleId++
               cy.add({ group: 'edges', data: edgeData })
             }

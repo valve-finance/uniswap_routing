@@ -5,6 +5,7 @@ import * as r from './../utils/routing'
 import * as c from './../utils/constants'
 import { initUniData } from '../utils/data'
 import { RouteCache } from '../routeCache'
+import { deepCopy } from '../utils/misc'
 
 import express from 'express'
 import http from 'http'
@@ -141,10 +142,10 @@ export const server = async(port: string): Promise<void> => {
           result.error = sanitizeStr
           log.debug(sanitizeStr)
         } else {
-          const _routes = await _routeCache.getRoutes(source,
-                                                      dest,
-                                                      { maxHops: _options.max_hops.value })
-
+          const _routesImmutable = await _routeCache.getRoutes(source,
+                                                               dest,
+                                                               { maxHops: _options.max_hops.value })
+          const _routes = deepCopy(_routesImmutable)
           const _costedRoutes: t.VFRoutes = await r.costRoutes(_uniData.pairData,
                                                                _uniData.tokenData,
                                                                _routes,

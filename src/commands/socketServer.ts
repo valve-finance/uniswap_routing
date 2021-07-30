@@ -6,7 +6,7 @@ import * as c from './../utils/constants'
 import { initUniData } from '../utils/data'
 import { RouteCache } from '../routeCache'
 import { getUniRouteV2 } from '../utils/uniswapSDK'
-import { getMultipath } from './test'
+import { deepCopy } from '../utils/misc'
 
 import express from 'express'
 import http from 'http'
@@ -129,32 +129,90 @@ const _processRouteReq = async(reqType: string,
                                options: any): Promise<any> =>
 {
   socket && socket.emit(reqType, { requestId, status: 'Determining routes.', })
-  const _routes = await routeCache.getRoutes(source, dest, { maxHops: options.max_hops.value })
+  const _routesP: Promise<t.VFRoutes> = routeCache.getRoutes(source, dest, { maxHops: options.max_hops.value })
+                                                   .catch(error => {
+                                                     // TODO: signal an error in routing to the client
+                                                     return []
+                                                   })
+
+  const _uniRouteP: Promise<any> = getUniRouteV2(source, dest, amount)
+                                   .catch(error => { return {} })
+  
+  const _results = await Promise.all([_routesP, _uniRouteP])
+  const _routesImmutable: t.VFRoutes = _results[0]    // <-- TODO: cleanup route cache to dc routes by default.
+  const _routes = deepCopy(_routesImmutable)
+  const _uniRoute: any = _results[1]
 
   /**
-   *  TODO: process this with the route cache above and insert it into the routes and tag it
-   *        as the official UNI one so we get price info for it in the costing.
+   *    Tag the official UNI route and insert it if it's not in the cach result, so that
+   *    it gets costed.
    */
-  const _uniRouteP: Promise<string> = getUniRouteV2(source, dest, amount)
-                                      .catch(error => { return '' })
+  let foundUniRoute = false
+  const uniRoutePathAsStr = _uniRoute.routePath.join(',').toLowerCase()
+  for (const _route of _routes) {
+    const _routePath: string[] = []
+
+    for (let idx = 0; idx < _route.length; idx++) {
+      const _seg: t.VFSegment = _route[idx]
+      if (idx === 0) {
+        _routePath.push(_seg.src)
+      }
+      _routePath.push(_seg.dst)
+    }
+
+    if (_routePath.join(',').toLowerCase() === uniRoutePathAsStr) {
+      foundUniRoute = true
+      _route.forEach((_seg: t.VFSegment) => _seg.isUni = true)
+
+      // TODO TODO: To check our work w/ quotes, compare the value of
+      //            _uniRoute.expectedConvertQuote to the amount in the 
+      //            last seg if data updates are turned on
+      break
+    }
+  }
+
+  if (!foundUniRoute) {
+    log.warn(`Uni route not in results, building and adding.`)
+    try {
+      const newRoute: t.VFRoute = []
+      for (let idx = 0; idx < _uniRoute.routePath.length-1; idx++) {
+        const src = _uniRoute.routePath[idx].toLowerCase()
+        const dst = _uniRoute.routePath[idx].toLowerCase()
+
+        const edgeData: any = uniData.pairGraph.edge(src, dst)
+        let pairId = ''
+        if (edgeData && edgeData.hasOwnProperty('pairIds') ) {
+          if (edgeData.pairIds.length >= 1) {
+            pairId = edgeData.pairIds[0]
+          }
+          if (edgeData.pairIds.length !== 1)  {
+            log.warn(`Building UNI route, edge data pairIds length is ${edgeData.pairIds.length} for ${src} to ${dst}.`)
+          }
+        } else {
+          throw Error(`Unable to build UNI route; no edge data or pairIds for edge ${src} to ${dst}`)
+        }
+
+        newRoute.push({
+          src,
+          dst,
+          pairId,
+          isUni: true
+        })
+      }
+
+      _routes.push(newRoute)
+    } catch (error) {
+      log.error(error)
+    }
+  }
 
   socket && socket.emit(reqType, { requestId, status: 'Getting price quotes.', })
-  const _costedRoutesP: Promise<t.VFRoutes> = 
-      r.costRoutes(uniData.pairData, 
-                   uniData.tokenData,
-                   _routes,
-                   amount,
-                   options.max_impact.value,
-                   options.update_data.value)
-      .catch(error => {
-        // TODO: signal an error in routing to the client
-        return []
-      })
-
-  const results = await Promise.all([_costedRoutesP, _uniRouteP])
-  const _costedRoutes: t.VFRoutes = results[0]
-  const _uniRoute: string = results[1]
-
+  const _costedRoutes: t.VFRoutes = await r.costRoutes(uniData.pairData, 
+                                                       uniData.tokenData,
+                                                       _routes,
+                                                       amount,
+                                                       options.max_impact.value,
+                                                       options.update_data.value)
 
   _costedRoutes.sort((a: t.VFRoute, b: t.VFRoute) => {    // Sort descending by amount of destination token received
     const aLastDstAmount = a[a.length-1].dstAmount
@@ -176,7 +234,7 @@ const _processRouteReq = async(reqType: string,
     return resultObj
   } else {
     const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(uniData.pairData, uniData.tokenData, _requestedCostedRoutes)
-    const resultObj = { requestId, status: 'Completed request.', routes: _legacyFmtRoutes, uniRoute: _uniRoute }
+    const resultObj = { requestId, status: 'Completed request.', routes: _legacyFmtRoutes, uniRoute: _uniRoute.routeText }
     socket && socket.emit(reqType, resultObj)
     return resultObj
   }
@@ -437,6 +495,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
       // Prune the trade tree copy to only contain the top n routes:
       //
       const n = 20
+      let numRoutes = n
       if (pruneTradeTree && pruneTradeTree.children) {
         const routes: any = []
         for (const child of pruneTradeTree.children) {
@@ -450,6 +509,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
         routes.sort((a: any, b: any) => { return b.totalGain - a.totalGain })   // Descending sort
 
         const topRoutes: any = routes.splice(0, n)   // don't remove -- mutates routes for prune
+        numRoutes = topRoutes.length
         for (const pruneRoute of routes) {
           const { routeId, totalGain } = pruneRoute
           r.pruneTreeRoute(pruneTradeTree, routeId)
@@ -513,21 +573,21 @@ export const startSocketServer = async(port: string): Promise<void> => {
       if (tradeTree) { 
         const cyGraph: cytoscape.Core = r.tradeTreeToCyGraph(tradeTree, useUuid)
         pages.push({
-          description: 'Raw Route Data',
+          description: 'Individual Routes Meeting Specified Criteria',
           elements: r.elementDataFromCytoscape(cyGraph)
         })
       }
       if (pruneTradeTree) {
         const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(pruneTradeTree, useUuid)
         pages.push({
-          description: 'Top 2 Routes',
+          description: `Top ${numRoutes} Routes`,
           elements: r.elementDataFromCytoscape(cyGraphCopy)
         })
       }
       if (costedTradeTree) {
         const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(costedTradeTree, useUuid)
         pages.push({
-          description: `Costed Split Across Top n Routes: $${Object.values(sum).join(', ')}`,
+          description: `Multi-Path Route, Returns: $${Object.values(sum).join(', ')}`,
           elements: r.elementDataFromCytoscape(cyGraphCopy)
         })
       }
