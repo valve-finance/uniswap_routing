@@ -620,7 +620,7 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode, useUuid=false): cyt
               cyNodeId = uuidLookup[nodeId]
             }
 
-            const isMultiPath = node.value.hasOwnProperty('trades')
+            let isMultiPath = node.value.hasOwnProperty('trades')
             let amount = node.value.amount
             let amountUSD = node.value.amountUSD
             if (isMultiPath) {
@@ -630,14 +630,8 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode, useUuid=false): cyt
                 trade = node.value.trades[tradeKey]
                 break;
               }
-              if (trade && context.parent) {
-                // Special case - parent only has an output amount
-                amount = trade.outputAmount
-                amountUSD = trade.outputUsd
-              } else {
-                amount = trade.inputAmountP
-                amountUSD = trade.inputUsd
-              }
+              amount = trade.outputAmount
+              amountUSD = trade.outputUsd
             }
 
             const nodeData = {
@@ -652,7 +646,7 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode, useUuid=false): cyt
             cy.add({ group: 'nodes', data: nodeData})
 
             // Special case - root node has no parents and thus no edges. Only
-            // add an edge if the parent is not null:
+            // add an edge if the parent is not null (i.e. for non root node):
             //
             if (context.parent) {
               const parent = context.parent
