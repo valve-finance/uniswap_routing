@@ -488,12 +488,23 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
         _eleIdCounter++
 
         node = tradeTree
-      } else if (node === tradeTree /* root node */ && 
-                 node.value.address !== seg.src) {
-        throw Error(`buildTradeTree: root node does not match address ` +
-                    `${node.value.address} (${node.value.symbol}) of src ` +
-                    `in first segment of route.\n` +
-                    `${JSON.stringify(route, null, 2)}`)
+      } else if (node === tradeTree) {
+        // Error condition if the addresses for the same root node mismatch!
+        if (node.value.address !== seg.src) {
+          throw Error(`buildTradeTree: root node does not match address ` +
+                      `${node.value.address} (${node.value.symbol}) of src ` +
+                      `in first segment of route.\n` +
+                      `${JSON.stringify(route, null, 2)}`)
+        } else {
+          // Special case - we've already added a root node, but need to ensure it's
+          // tagged as the uniswap route if the current route is the uniswap one.
+          //   - this might make more sense using a find path op after the fact using
+          //     the uni route. (TODO:)
+          //
+          if (seg.isUni) {
+            node.value.color = PATH_COLORS.UNI
+          }
+        }
       }
 
       // Add the destination of the segment to the tree if it doesn't exist
@@ -520,6 +531,14 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
         }
         _eleIdCounter++
         node.children.push(dstNode)
+      } else {
+        // Special case - we've already added this node, but need to ensure it's tagged as
+        // the uniswap route. Might make more sense to do this in a post build find operation
+        // using the UNI route (TODO:)
+        //
+        if (seg.isUni) {
+          dstNode.value.color = PATH_COLORS.UNI
+        }
       }
       if (dstNode.value.gainToDest !== undefined) {
         dstNode.value.gainToDest[routeIdx] = (seg.gainToDest === undefined) ? 0.0 : seg.gainToDest

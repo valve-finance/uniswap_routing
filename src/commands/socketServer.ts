@@ -494,7 +494,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
 
       // Prune the trade tree copy to only contain the top n routes:
       //
-      const n = 20
+      const n = 10
       let numRoutes = n
       if (pruneTradeTree && pruneTradeTree.children) {
         const routes: any = []
