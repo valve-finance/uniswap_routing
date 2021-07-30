@@ -630,7 +630,11 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode, useUuid=false): cyt
                 trade = node.value.trades[tradeKey]
                 break;
               }
-              if (trade) {
+              if (trade && context.parent) {
+                // Special case - parent only has an output amount
+                amount = trade.outputAmount
+                amountUSD = trade.outputUsd
+              } else {
                 amount = trade.inputAmountP
                 amountUSD = trade.inputUsd
               }
