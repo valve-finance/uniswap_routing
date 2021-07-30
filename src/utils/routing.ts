@@ -620,16 +620,29 @@ export const tradeTreeToCyGraph = (tradeTree: TradeTreeNode, useUuid=false): cyt
               cyNodeId = uuidLookup[nodeId]
             }
 
-            const labelTokenAmt = (node.value.amount) ? parseFloat(node.value.amount).toFixed(6) : '0'
+            const isMultiPath = node.value.hasOwnProperty('trades')
+            let amount = node.value.amount
+            let amountUSD = node.value.amountUSD
+            if (isMultiPath) {
+              let trade: any = undefined
+              // Get first trade
+              for (const tradeKey in node.value.trades) {
+                trade = node.value.trades[tradeKey]
+                break;
+              }
+              if (trade) {
+                amount = trade.inputAmountP
+                amountUSD = trade.inputUsd
+              }
+            }
+
             const nodeData = {
               id: `n_${cyNodeId}`,
               address: node.value.address,
-              amount: node.value.amount,
-              amountUSD: node.value.amountUSD,
+              amount,
+              amountUSD,
               symbol: node.value.symbol,
-              label: `${node.value.symbol}\n` +
-                     `${labelTokenAmt}\n` +
-                     `($${node.value.amountUSD})`,
+              label: '',
               color: `${node.value.color}`
             }
             cy.add({ group: 'nodes', data: nodeData})
