@@ -592,10 +592,10 @@ export const startSocketServer = async(port: string): Promise<void> => {
       let tokens = ''
 
       if (!isNaN(parseFloat(usdAmount)) && _uniData.wethPairData) {
-        tokens = r.getEstimatedUSD(_uniData.pairData,
-                                   _uniData.wethPairData,
-                                   source.toLowerCase(),
-                                   usdAmount)
+        tokens = r.getEstimatedTokensFromUSD(_uniData.pairData,
+                                             _uniData.wethPairData,
+                                             source.toLowerCase(),
+                                             usdAmount)
       }
 
       socket.emit('usdTokenQuote', {tokens})

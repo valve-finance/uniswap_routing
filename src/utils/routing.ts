@@ -1046,13 +1046,12 @@ export const elementDataFromCytoscape = (cyGraph: cytoscape.Core): any =>
  *    wethTokenPairId: string,
  *    wethUsdtPairId: string
  * }
- * @param allPair 
  */
 export const getEstimatedUSD = (allPairData: t.Pairs,
                                 wethPairDict: t.WethPairIdDict,
                                 tokenId: string,
-                                tokenAmount: string): string => {
-
+                                tokenAmount: string): string =>
+{
   let wethPerToken: string = '1'    // Assume input token ID is for WETH
 
   if (tokenId !== WETH_ADDR) {
@@ -1079,6 +1078,53 @@ export const getEstimatedUSD = (allPairData: t.Pairs,
   } catch (ignoredError) {
     log.warn(`getEstimatedUSD failed, ignoring.\n${ignoredError}`)
   }
+  return ''
+}
+
+/**
+ * To compute the amount of a token for a given amount of USD:
+ * 
+ *  TokenAmount = usdAmount * Token/Weth * Weth/USDC
+ * 
+ * This method builds a lookup that lets you get the pair IDs needed to compute this:
+ * {
+ *    wethId: string,
+ *    wethTokenPairId: string,
+ *    wethUsdtPairId: string
+ * }
+ */
+export const getEstimatedTokensFromUSD = (allPairData: t.Pairs,
+                                          wethPairDict: t.WethPairIdDict,
+                                          tokenId: string,
+                                          usdAmount: string): string =>
+{
+  let tokenPerWeth: string = '1'    // Assume input token ID is for WETH
+
+  if (tokenId !== WETH_ADDR) {
+    const wethPairId: string = wethPairDict[tokenId] 
+    if (!wethPairId) {
+      log.warn(`getEstimatedUSD: no WETH pair for ${tokenId}.`)
+      return ''
+    }
+    const wethPair: t.Pair = allPairData.getPair(wethPairId)
+    tokenPerWeth = (wethPair.token0.id === WETH_ADDR) ? wethPair.token1Price : wethPair.token0Price 
+  } 
+
+  const usdcWethPairId: string = wethPairDict[USDC_ADDR]
+  const usdcWethPair: t.Pair = allPairData.getPair(usdcWethPairId)
+  const wethPerUsdc: string = (usdcWethPair.token0.id === USDC_ADDR) ?
+                              usdcWethPair.token1Price : usdcWethPair.token0Price
+
+  try {
+    const tokenAmount: number = parseFloat(usdAmount) * parseFloat(tokenPerWeth) * parseFloat(wethPerUsdc)
+    // log.debug(`getEstimateUSD (${tokenId}):\n` +
+    //           `  ${usdAmount} * ${tokenPerWeth} * ${usdcPerWeth} = \n` +
+    //           `    ${tokenAmount.toFixed(2)}`)
+    return tokenAmount.toFixed(2)
+  } catch (ignoredError) {
+    log.warn(`getEstimatedUSD failed, ignoring.\n${ignoredError}`)
+  }
+
   return ''
 }
 
