@@ -17,7 +17,6 @@ import socketio from 'socket.io'
 import { v4 as uuidv4 } from 'uuid'
 import cytoscape from 'cytoscape'
 import crawl from 'tree-crawl'
-import { SupportedAlgorithm } from 'ethereum-abi-types-generator/node_modules/ethersv5/lib/utils'
 
 
 // TODO: back with Redis instead of mem
@@ -240,6 +239,265 @@ const _processRouteReq = async(reqType: string,
   }
 }
 
+const _processMultirouteReq = async(reqType: string,
+                                    uniData: t.UniData,
+                                    routeCache: RouteCache,
+                                    socket: socketio.Socket | undefined,
+                                    requestId: string,
+                                    source: string,
+                                    dest: string,
+                                    amount: string,
+                                    options: any): Promise<any> => 
+{
+  const resultObj = await _processRouteReq(reqType, uniData, routeCache, socket, requestId, source, dest, amount, options)
+
+  r.annotateRoutesWithGainToDest(resultObj.routes)
+
+  /**
+   * TODO: before converting routes to a trading tree, filter them based on a minimum gain to dest criteria.
+   */
+
+  /**
+   *  The route analysis object allows us to quickly filter out routes that offer no splitting benefits as well as
+   *  filtering out routes that have high impact pairs further downstream (a later hop) that would impact trade estimates.
+   * 
+   *  Route Analysis Object:
+   *  {
+   *    routes: {
+   *      <id>: {
+   *        route: <route obj>,
+   *        yieldPct: <percentage>,
+   *      }
+   *    },
+   *    pairs: {
+   *      <pairId>: {
+   *        <hop>: [
+   *          { id: <route id>,
+   *            impact: <percentage>
+   *          }
+   *          ...
+   *        ],
+   *        ...
+   *      }
+   *    }
+   *  }
+   */
+  // let _routeIdCounter = 0
+  // const routeAnalysis: any = {
+  //   routes: {},
+  //   pairs: {}
+  // }
+  // const MIN_YIELD_PCT = 20.0
+  // for (const route of resultObj.routes) {
+  //   const firstSeg: t.VFSegment = route[0]
+  //   const lastSeg: t.VFSegment = route[route.length - 1]
+  //   let yieldPct: number = (firstSeg.srcUSD && lastSeg.dstUSD) ? 
+  //     100.0 * (parseFloat(lastSeg.dstUSD) / parseFloat(firstSeg.srcUSD)) : 0.0
+  //   if (yieldPct < MIN_YIELD_PCT) {
+  //     continue
+  //   }
+    
+  //   const routeId = _routeIdCounter++
+  //   routeAnalysis.routes[routeId] = {
+  //     route,
+  //     yieldPct
+  //   }
+
+  //   let hopIdx = 0
+  //   for (const seg of route) {
+  //     hopIdx++
+  //     const { pairId, impact } = seg
+  //     if (!routeAnalysis.pairs.hasOwnProperty(pairId)) {
+  //       routeAnalysis.pairs[pairId] = {}
+  //     }
+  //     if (!routeAnalysis.pairs[pairId].hasOwnProperty(hopIdx)) {
+  //       routeAnalysis.pairs[pairId][hopIdx] = []
+  //     }
+  //     routeAnalysis.pairs[pairId][hopIdx].push({
+  //       id: routeId,
+  //       impact: parseFloat(impact)
+  //     })
+  //   }
+  // }
+  // console.log(`Route analysis:\n` +
+  //             `================================================================================\n` +
+  //             `${JSON.stringify(routeAnalysis, null, 2)}`)
+  
+  // /* Now remove routes that re-use pairs with slippage above a threshold, n, in later route hops.
+  //  * i.e. If route 1 uses pair X in the first hop and route 2 uses pair X in the second hop, exclude
+  //  *      route 2.
+  //  * TODO: this could easily be done with a crawl of the tree and populating a dictionary (realized this
+  //  *       after writing the working code below) for later pruning of routes.
+  //  */
+  // const MAX_SLIPPAGE = 2.0    // Impact
+  // const excludeRoutes: string[] = []
+  // for (const pairId in routeAnalysis.pairs) {
+  //   const pairData = routeAnalysis.pairs[pairId]
+
+  //   // Exclude pairs that are never in more than one hop.
+  //   //
+  //   if (Object.keys(pairData).length <= 1) {
+  //     continue
+  //   }
+
+  //   let firstHop = true
+  //   let maxSlippage = 0.0
+  //   for (let hopIdx = 0; hopIdx <= options.max_hops.value; hopIdx++) {
+  //     const pairHopData = pairData[hopIdx]
+  //     if (!pairHopData) {
+  //       continue
+  //     }
+  //     // log.debug(`Examining pair:\n${JSON.stringify(pairHopData, null, 2)}`)
+
+  //     for (const pairSegmentData of pairHopData) {
+  //       if (pairSegmentData.impact > maxSlippage) {
+  //         maxSlippage = pairSegmentData.impact
+  //       }
+  //     }
+
+  //     // Don't remove the pair if it's in the first hop we've found using this pair in any of the routes:
+  //     //
+  //     if (firstHop) {
+  //       //    - TODO: special case, pairs in the same hop but with different impacts (implies that they are different
+  //       //            paths).
+  //       //
+  //       firstHop = false
+  //       continue
+  //     }
+
+  //     // Remove routes that feature a pair further down the route that is used earlier and exceeds our
+  //     // slippage threshold:
+  //     //
+  //     if (maxSlippage > MAX_SLIPPAGE) {
+  //       for (const pairSegmentData of pairHopData) {
+  //         excludeRoutes.push(pairSegmentData.id)
+  //       }
+  //     }
+  //   }
+  // }
+  // log.debug(`Removing ${excludeRoutes.length} routes due to high-slippage pairs re-used downstream.\n`)
+  // const filteredRoutes: t.VFRoutes = []
+  // for (const routeId in routeAnalysis.routes) {
+  //   if (excludeRoutes.includes(routeId)) {
+  //     continue
+  //   }
+  //   filteredRoutes.push(routeAnalysis.routes[routeId].route)
+  // }
+
+
+  // r.annotateRoutesWithSymbols(uniData.tokenData, filteredRoutes)
+  // const tradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(filteredRoutes)
+
+
+  r.annotateRoutesWithSymbols(uniData.tokenData, resultObj.routes)
+  const tradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(resultObj.routes)
+  const pruneTradeTree: r.TradeTreeNode | undefined = (tradeTree) ? r.cloneTradeTree(tradeTree) : undefined
+  // const pruneTradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(resultObj.routes) 
+
+
+  // Prune the trade tree copy to only contain the top n routes:
+  //
+  const n = 10
+  let numRoutes = n
+  if (pruneTradeTree && pruneTradeTree.children) {
+    const routes: any = []
+    for (const child of pruneTradeTree.children) {
+      const { gainToDest } = child.value
+      if (gainToDest) {
+        for (const key in gainToDest) {
+          routes.push( { routeId: key, totalGain: gainToDest[key] })
+        }
+      }
+    }
+    routes.sort((a: any, b: any) => { return b.totalGain - a.totalGain })   // Descending sort
+
+    const topRoutes: any = routes.splice(0, n)   // don't remove -- mutates routes for prune
+    numRoutes = topRoutes.length
+    for (const pruneRoute of routes) {
+      const { routeId, totalGain } = pruneRoute
+      r.pruneTreeRoute(pruneTradeTree, routeId)
+    }
+
+    // log.debug(`Post prune pruneTradeTree:\n` +
+    //           `--------------------------------------------------------------------------------\n`)
+    // let treeStr = ''
+    // let lastLevel: number | undefined = undefined
+    // crawl(pruneTradeTree, 
+    //       (node, context) => {
+    //         if (lastLevel !== context.level) {
+    //           treeStr += '\n'
+    //           lastLevel = context.level
+    //           treeStr += `(${lastLevel}): `
+    //         }
+    //         treeStr += `${(node.value.symbol ? node.value.symbol : '')}, `
+    //       },
+    //       { order: 'bfs'})
+    // log.debug(treeStr)
+  }
+
+  let sum: any= {}
+  const costedTradeTree: r.TradeTreeNode | undefined = (pruneTradeTree) ? 
+      r.cloneTradeTree(pruneTradeTree) : undefined
+  if (costedTradeTree) {
+    await r.costTradeTree(uniData.pairData,
+                          uniData.tokenData,
+                          amount,
+                          costedTradeTree,
+                          false /* update pair data */)
+    
+    if (uniData.wethPairData) {
+      await r.annotateTradeTreeWithUSD(uniData.pairData,
+                                      uniData.wethPairData,
+                                      costedTradeTree,
+                                      false /* update pair data */)
+    }
+    // Calculate the total quickly
+    crawl(costedTradeTree,
+          (node, context) => {
+            if (node.children.length === 0) {
+              if (node.value.trades) {
+                for (const tradeId in node.value.trades) {
+                  if (!sum.hasOwnProperty(tradeId)) {
+                    sum[tradeId] = 0
+                  }
+                  const trade = node.value.trades[tradeId]
+                  if (trade.outputUsd) {
+                    sum[tradeId] += parseFloat(trade.outputUsd)
+                  }
+                }
+              }
+            }
+          },
+          { order: 'pre' })
+  }
+
+  let pages: any = []
+  const useUuid = true
+  if (tradeTree) { 
+    const cyGraph: cytoscape.Core = r.tradeTreeToCyGraph(tradeTree, useUuid)
+    pages.push({
+      description: 'Individual Routes Meeting Specified Criteria',
+      elements: r.elementDataFromCytoscape(cyGraph)
+    })
+  }
+  if (pruneTradeTree) {
+    const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(pruneTradeTree, useUuid)
+    pages.push({
+      description: `Top ${numRoutes} Routes`,
+      elements: r.elementDataFromCytoscape(cyGraphCopy)
+    })
+  }
+  if (costedTradeTree) {
+    const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(costedTradeTree, useUuid)
+    pages.push({
+      description: `Multi-Path Route, Returns: $${Object.values(sum).join(', ')}`,
+      elements: r.elementDataFromCytoscape(cyGraphCopy)
+    })
+  }
+
+  return pages
+}
+
 export const startSocketServer = async(port: string): Promise<void> => {
   log.info(`Starting Uniswap Routing Socket Server on port ${port}...\n` +
            `(wait until 'READY' appears before issuing requests)`)
@@ -285,7 +543,17 @@ export const startSocketServer = async(port: string): Promise<void> => {
       origin: ["http://localhost:3000", "https://playground.valve.finance"],
       methods: ["GET", "POST"]
     }
-  const socketServer = new socketio.Server(server, { cors: corsObj })
+  //
+  // TODO: Workaround for now--on long requests the socket ping times out on 
+  //       the client side b/c this process is busy (usually on a 4 hop route).
+  //       When time permits introduce reconnect and a job manager so a client
+  //       can disconnect and retrieve the job status on reconnect:
+  //        - turned off until doing long hop work
+  // const THREE_MIN_IN_MS = 5 * 60 * 1000
+  const socketServer = new socketio.Server(server, { 
+                                             cors: corsObj
+                                            //  pingTimeout: THREE_MIN_IN_MS
+                                           })
 
   const clientSockets: any = {}
   socketServer.on('connection', (socket: socketio.Socket) => {
@@ -320,6 +588,18 @@ export const startSocketServer = async(port: string): Promise<void> => {
       log.debug(`Processed request in ${Date.now() - _startMs} ms`)
     })
 
+    socket.on('usdTokenQuote', (source: string, usdAmount: string) => {
+      let tokens = ''
+
+      if (!isNaN(parseFloat(usdAmount)) && _uniData.wethPairData) {
+        tokens = r.getEstimatedUSD(_uniData.pairData,
+                                   _uniData.wethPairData,
+                                   source.toLowerCase(),
+                                   usdAmount)
+      }
+
+      socket.emit('usdTokenQuote', {tokens})
+    }) 
 
     socket.on('multipath', async(source: string,
                                  dest: string,
@@ -346,256 +626,45 @@ export const startSocketServer = async(port: string): Promise<void> => {
       
       _options.multipath = true
       _options.max_results.value = 100
-      const resultObj = await _processRouteReq(reqType, _uniData, _routeCache, socket, requestId, source, dest, amount, _options)
 
-      r.annotateRoutesWithGainToDest(resultObj.routes)
+      const pages = await _processMultirouteReq(reqType,
+                                                _uniData,
+                                                _routeCache,
+                                                socket,
+                                                requestId,
+                                                source,
+                                                dest,
+                                                amount,
+                                                _options)
 
-      /**
-       * TODO: before converting routes to a trading tree, filter them based on a minimum gain to dest criteria.
-       */
-
-      /**
-       *  The route analysis object allows us to quickly filter out routes that offer no splitting benefits as well as
-       *  filtering out routes that have high impact pairs further downstream (a later hop) that would impact trade estimates.
-       * 
-       *  Route Analysis Object:
-       *  {
-       *    routes: {
-       *      <id>: {
-       *        route: <route obj>,
-       *        yieldPct: <percentage>,
-       *      }
-       *    },
-       *    pairs: {
-       *      <pairId>: {
-       *        <hop>: [
-       *          { id: <route id>,
-       *            impact: <percentage>
-       *          }
-       *          ...
-       *        ],
-       *        ...
-       *      }
-       *    }
-       *  }
-       */
-      // let _routeIdCounter = 0
-      // const routeAnalysis: any = {
-      //   routes: {},
-      //   pairs: {}
-      // }
-      // const MIN_YIELD_PCT = 20.0
-      // for (const route of resultObj.routes) {
-      //   const firstSeg: t.VFSegment = route[0]
-      //   const lastSeg: t.VFSegment = route[route.length - 1]
-      //   let yieldPct: number = (firstSeg.srcUSD && lastSeg.dstUSD) ? 
-      //     100.0 * (parseFloat(lastSeg.dstUSD) / parseFloat(firstSeg.srcUSD)) : 0.0
-      //   if (yieldPct < MIN_YIELD_PCT) {
-      //     continue
-      //   }
-        
-      //   const routeId = _routeIdCounter++
-      //   routeAnalysis.routes[routeId] = {
-      //     route,
-      //     yieldPct
-      //   }
-
-      //   let hopIdx = 0
-      //   for (const seg of route) {
-      //     hopIdx++
-      //     const { pairId, impact } = seg
-      //     if (!routeAnalysis.pairs.hasOwnProperty(pairId)) {
-      //       routeAnalysis.pairs[pairId] = {}
-      //     }
-      //     if (!routeAnalysis.pairs[pairId].hasOwnProperty(hopIdx)) {
-      //       routeAnalysis.pairs[pairId][hopIdx] = []
-      //     }
-      //     routeAnalysis.pairs[pairId][hopIdx].push({
-      //       id: routeId,
-      //       impact: parseFloat(impact)
-      //     })
-      //   }
-      // }
-      // console.log(`Route analysis:\n` +
-      //             `================================================================================\n` +
-      //             `${JSON.stringify(routeAnalysis, null, 2)}`)
-      
-      // /* Now remove routes that re-use pairs with slippage above a threshold, n, in later route hops.
-      //  * i.e. If route 1 uses pair X in the first hop and route 2 uses pair X in the second hop, exclude
-      //  *      route 2.
-      //  * TODO: this could easily be done with a crawl of the tree and populating a dictionary (realized this
-      //  *       after writing the working code below) for later pruning of routes.
-      //  */
-      // const MAX_SLIPPAGE = 2.0    // Impact
-      // const excludeRoutes: string[] = []
-      // for (const pairId in routeAnalysis.pairs) {
-      //   const pairData = routeAnalysis.pairs[pairId]
-
-      //   // Exclude pairs that are never in more than one hop.
-      //   //
-      //   if (Object.keys(pairData).length <= 1) {
-      //     continue
-      //   }
-
-      //   let firstHop = true
-      //   let maxSlippage = 0.0
-      //   for (let hopIdx = 0; hopIdx <= _options.max_hops.value; hopIdx++) {
-      //     const pairHopData = pairData[hopIdx]
-      //     if (!pairHopData) {
-      //       continue
-      //     }
-      //     // log.debug(`Examining pair:\n${JSON.stringify(pairHopData, null, 2)}`)
-
-      //     for (const pairSegmentData of pairHopData) {
-      //       if (pairSegmentData.impact > maxSlippage) {
-      //         maxSlippage = pairSegmentData.impact
-      //       }
-      //     }
-
-      //     // Don't remove the pair if it's in the first hop we've found using this pair in any of the routes:
-      //     //
-      //     if (firstHop) {
-      //       //    - TODO: special case, pairs in the same hop but with different impacts (implies that they are different
-      //       //            paths).
-      //       //
-      //       firstHop = false
-      //       continue
-      //     }
-
-      //     // Remove routes that feature a pair further down the route that is used earlier and exceeds our
-      //     // slippage threshold:
-      //     //
-      //     if (maxSlippage > MAX_SLIPPAGE) {
-      //       for (const pairSegmentData of pairHopData) {
-      //         excludeRoutes.push(pairSegmentData.id)
-      //       }
-      //     }
-      //   }
-      // }
-      // log.debug(`Removing ${excludeRoutes.length} routes due to high-slippage pairs re-used downstream.\n`)
-      // const filteredRoutes: t.VFRoutes = []
-      // for (const routeId in routeAnalysis.routes) {
-      //   if (excludeRoutes.includes(routeId)) {
-      //     continue
-      //   }
-      //   filteredRoutes.push(routeAnalysis.routes[routeId].route)
-      // }
-
-
-      // r.annotateRoutesWithSymbols(_uniData.tokenData, filteredRoutes)
-      // const tradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(filteredRoutes)
-
-
-      r.annotateRoutesWithSymbols(_uniData.tokenData, resultObj.routes)
-      const tradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(resultObj.routes)
-      const pruneTradeTree: r.TradeTreeNode | undefined = (tradeTree) ? r.cloneTradeTree(tradeTree) : undefined
-      // const pruneTradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(resultObj.routes) 
- 
-
-      // Prune the trade tree copy to only contain the top n routes:
-      //
-      const n = 10
-      let numRoutes = n
-      if (pruneTradeTree && pruneTradeTree.children) {
-        const routes: any = []
-        for (const child of pruneTradeTree.children) {
-          const { gainToDest } = child.value
-          if (gainToDest) {
-            for (const key in gainToDest) {
-              routes.push( { routeId: key, totalGain: gainToDest[key] })
-            }
-          }
-        }
-        routes.sort((a: any, b: any) => { return b.totalGain - a.totalGain })   // Descending sort
-
-        const topRoutes: any = routes.splice(0, n)   // don't remove -- mutates routes for prune
-        numRoutes = topRoutes.length
-        for (const pruneRoute of routes) {
-          const { routeId, totalGain } = pruneRoute
-          r.pruneTreeRoute(pruneTradeTree, routeId)
-        }
-
-        // log.debug(`Post prune pruneTradeTree:\n` +
-        //           `--------------------------------------------------------------------------------\n`)
-        // let treeStr = ''
-        // let lastLevel: number | undefined = undefined
-        // crawl(pruneTradeTree, 
-        //       (node, context) => {
-        //         if (lastLevel !== context.level) {
-        //           treeStr += '\n'
-        //           lastLevel = context.level
-        //           treeStr += `(${lastLevel}): `
-        //         }
-        //         treeStr += `${(node.value.symbol ? node.value.symbol : '')}, `
-        //       },
-        //       { order: 'bfs'})
-        // log.debug(treeStr)
-      }
-
-      let sum: any= {}
-      const costedTradeTree: r.TradeTreeNode | undefined = (pruneTradeTree) ? 
-          r.cloneTradeTree(pruneTradeTree) : undefined
-      if (costedTradeTree) {
-        await r.costTradeTree(_uniData.pairData,
-                              _uniData.tokenData,
-                              amount,
-                              costedTradeTree,
-                              false /* update pair data */)
-        
-        if (_uniData.wethPairData) {
-          await r.annotateTradeTreeWithUSD(_uniData.pairData,
-                                          _uniData.wethPairData,
-                                          costedTradeTree,
-                                          false /* update pair data */)
-        }
-        // Calculate the total quickly
-        crawl(costedTradeTree,
-              (node, context) => {
-                if (node.children.length === 0) {
-                  if (node.value.trades) {
-                    for (const tradeId in node.value.trades) {
-                      if (!sum.hasOwnProperty(tradeId)) {
-                        sum[tradeId] = 0
-                      }
-                      const trade = node.value.trades[tradeId]
-                      if (trade.outputUsd) {
-                        sum[tradeId] += parseFloat(trade.outputUsd)
-                      }
-                    }
-                  }
-                }
-              },
-              { order: 'pre' })
-      }
-
-      let pages: any = []
-      const useUuid = true
-      if (tradeTree) { 
-        const cyGraph: cytoscape.Core = r.tradeTreeToCyGraph(tradeTree, useUuid)
-        pages.push({
-          description: 'Individual Routes Meeting Specified Criteria',
-          elements: r.elementDataFromCytoscape(cyGraph)
-        })
-      }
-      if (pruneTradeTree) {
-        const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(pruneTradeTree, useUuid)
-        pages.push({
-          description: `Top ${numRoutes} Routes`,
-          elements: r.elementDataFromCytoscape(cyGraphCopy)
-        })
-      }
-      if (costedTradeTree) {
-        const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(costedTradeTree, useUuid)
-        pages.push({
-          description: `Multi-Path Route, Returns: $${Object.values(sum).join(', ')}`,
-          elements: r.elementDataFromCytoscape(cyGraphCopy)
-        })
-      }
       socket.emit('multipath', {
         requestId,
         pages
       })
       log.debug(`Processed request in ${Date.now() - _startMs} ms`)
+    })
+
+    // TODO: Refactor and clean this up.
+    //
+    // For now this code will:
+    //   1. Find all pairs with > X USD liquidity.
+    //   2. Compute trade performance of UNI default vs. multiroute
+    //      of trades of 0.1 * X USD between those tokens.
+    //
+    socket.on('report', (minPairLiquidity=100000000) => {
+      const tokenSet: Set<string> = new Set<string>()
+
+      // TODO: pair data return an iterator to the pairs:
+      for (const pairId of _uniData.pairData.getPairIds()) {
+        const pair = _uniData.pairData.getPair(pairId)
+        const usd = parseFloat(pair.reserveUSD)
+        if (usd > minPairLiquidity) {
+          tokenSet.add(pair.token0.id.toLowerCase())
+          tokenSet.add(pair.token1.id.toLowerCase())
+        }
+      }
+
+      log.debug(`Found ${tokenSet.size} tokens in pairs with > $${minPairLiquidity} USD liquidity.`)
     })
 
     socket.on('disconnect', (reason: string) => {

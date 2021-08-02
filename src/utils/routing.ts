@@ -1048,10 +1048,10 @@ export const elementDataFromCytoscape = (cyGraph: cytoscape.Core): any =>
  * }
  * @param allPair 
  */
-const getEstimatedUSD = (allPairData: t.Pairs,
-                         wethPairDict: t.WethPairIdDict,
-                         tokenId: string,
-                         tokenAmount: string): string => {
+export const getEstimatedUSD = (allPairData: t.Pairs,
+                                wethPairDict: t.WethPairIdDict,
+                                tokenId: string,
+                                tokenAmount: string): string => {
 
   let wethPerToken: string = '1'    // Assume input token ID is for WETH
 
