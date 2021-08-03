@@ -560,28 +560,28 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
 
 const _cloneTradeTreeNode = (node: TradeTreeNode, exact: boolean): TradeTreeNode =>
 {
-    // Any types to allow for-loop based conditional assignment of cloned props below.
-    //
-    let clone: any = {
-      value: {
-        id: exact ? node.value.id : uuidv4(),
-        address: node.value.address,
-        color: node.value.color
-      },
-      children: [],
-    }
+  // Any types to allow for-loop based conditional assignment of cloned props below.
+  //
+  let clone: any = {
+    value: {
+      id: exact ? node.value.id : uuidv4(),
+      address: node.value.address,
+      color: node.value.color
+    },
+    children: [],
+  }
 
-    // TODO: better way using the type system/TS than listing out props / keys in arr below
-    //
-    const objProps = ['gainToDest', 'trades']
-    const nodeAny: any = node
-    for (const key of ['symbol', 'amount', 'amountUSD', 'pairId', 'impact', ...objProps]) {
-      if (nodeAny.value.hasOwnProperty(key)) {
-        clone.value[key] = (objProps.includes(key)) ?
-          deepCopy(nodeAny.value[key]) : nodeAny.value[key]
-      }
+  // TODO: better way using the type system/TS than listing out props / keys in arr below
+  //
+  const objProps = ['gainToDest', 'trades']
+  const nodeAny: any = node
+  for (const key of ['symbol', 'amount', 'amountUSD', 'pairId', 'impact', ...objProps]) {
+    if (nodeAny.value.hasOwnProperty(key)) {
+      clone.value[key] = (objProps.includes(key)) ?
+        deepCopy(nodeAny.value[key]) : nodeAny.value[key]
     }
-    return clone
+  }
+  return clone
 }
 
 const _cloneTradeTree = (node: TradeTreeNode, clone: TradeTreeNode, exact: boolean): void => {
@@ -594,8 +594,13 @@ const _cloneTradeTree = (node: TradeTreeNode, clone: TradeTreeNode, exact: boole
   }
 }
 
-export const cloneTradeTree = (root: TradeTreeNode, exact: boolean = false): TradeTreeNode | undefined =>
+export const cloneTradeTree = (root: TradeTreeNode | undefined, 
+                               exact: boolean = false): TradeTreeNode | undefined =>
 {
+  if (!root) {
+    return undefined
+  }
+
   const rootClone: TradeTreeNode = _cloneTradeTreeNode(root, exact)
   _cloneTradeTree(root, rootClone, exact)
   return rootClone 
@@ -1202,6 +1207,182 @@ export const annotateRoutesWithGainToDest = (routes: t.VFRoutes): void => {
       seg.gainToDest = gainToDest
     }
   }
+}
+
+/**
+ * pruneRoutes removes any routes that are below the specified minimum gain to
+ * destination. This is done by examining the 1st segment of each route's gain to
+ * destination (which is cumulative for the entire route). Similarly, only the top
+ * maxRoutes routes are returned, which is accomplished by sorting on gain to destination
+ * and returning the first maxRoutes routes.
+ * 
+ * @param routes 
+ * @param options 
+ * @returns 
+ */
+export const pruneRoutes = (routes: t.VFRoutes, options?: any): t.VFRoutes =>
+{
+  const _options: any = { maxRoutes: 10, minGainToDest: 0.05, ...options }
+
+  const prunedRoutes: t.VFRoutes = routes.filter((route: t.VFRoute) => {
+    return (route.length > 0 &&
+            route[0].gainToDest &&
+            route[0].gainToDest > options.minGainToDest)
+  })
+
+  prunedRoutes.sort((routeA: t.VFRoute, routeB: t.VFRoute) => {
+    if (routeA.length && 
+        routeB.length &&
+        routeA[0].gainToDest &&
+        routeB[0].gainToDest) {
+      return routeB[0].gainToDest - routeA[0].gainToDest    // descending sort
+    }
+    return 0.0
+  })
+
+  return prunedRoutes.slice(0, _options.maxRoutes)
+}
+
+/**
+ * removeRoutesWithLowerOrderPairs:
+ *    This method is a placeholder (implemented earlier and working),
+ *    for analyzing routes that may have a pair in common and removing
+ *    the pair in the later stages to ensure an accurate estimate.
+ * 
+ * WARNING: This should be run after pruneRoutes!!!!!!!!
+ * 
+ * TODO: re-write this to use a tree traversal and consider the optimal placement of a 
+ *       duplicate pair (i.e. a late stage high slippage pair may be more intelligent
+ *       than using the same pair early stage--gain to dest reveals more guidance in this
+ *       decision)
+ * 
+ *  The route analysis object in the method below allows us to quickly filter out routes that offer no splitting benefits as well as
+ *  filtering out routes that have high impact pairs further downstream (a later hop) that would impact trade estimates.
+ * 
+ *  Route Analysis Object:
+ *  {
+ *    routes: {
+ *      <id>: {
+ *        route: <route obj>,
+ *        yieldPct: <percentage>,
+ *      }
+ *    },
+ *    pairs: {
+ *      <pairId>: {
+ *        <hop>: [
+ *          { id: <route id>,
+ *            impact: <percentage>
+ *          }
+ *          ...
+ *        ],
+ *        ...
+ *      }
+ *    }
+ *  }
+ * 
+ */
+export const removeRoutesWithLowerOrderPairs = (routes: t.VFRoutes,
+                                                options: any) => {
+  let _routeIdCounter = 0
+  const routeAnalysis: any = {
+    routes: {},
+    pairs: {}
+  }
+
+  for (const route of routes) {
+    const firstSeg: t.VFSegment = route[0]
+    const lastSeg: t.VFSegment = route[route.length - 1]
+    let yieldPct: number = (firstSeg.srcUSD && lastSeg.dstUSD) ? 
+      100.0 * (parseFloat(lastSeg.dstUSD) / parseFloat(firstSeg.srcUSD)) : 0.0
+    
+    const routeId = _routeIdCounter++
+    routeAnalysis.routes[routeId] = {
+      route,
+      yieldPct
+    }
+
+    let hopIdx = 0
+    for (const seg of route) {
+      hopIdx++
+      const { pairId, impact } = seg
+      if (!routeAnalysis.pairs.hasOwnProperty(pairId)) {
+        routeAnalysis.pairs[pairId] = {}
+      }
+      if (!routeAnalysis.pairs[pairId].hasOwnProperty(hopIdx)) {
+        routeAnalysis.pairs[pairId][hopIdx] = []
+      }
+      routeAnalysis.pairs[pairId][hopIdx].push({
+        id: routeId,
+        impact: impact ? parseFloat(impact) : 0.0   // TODO: 0 might be inappropriate
+      })
+    }
+  }
+  console.log(`Route analysis:\n` +
+              `================================================================================\n` +
+              `${JSON.stringify(routeAnalysis, null, 2)}`)
+  
+  /* Now remove routes that re-use pairs with slippage above a threshold, n, in later route hops.
+   * i.e. If route 1 uses pair X in the first hop and route 2 uses pair X in the second hop, exclude
+   *      route 2.
+   * TODO: this could easily be done with a crawl of the tree and populating a dictionary (realized this
+   *       after writing the working code below) for later pruning of routes.
+   */
+  const MAX_SLIPPAGE = 2.0    // Impact
+  const excludeRoutes: string[] = []
+  for (const pairId in routeAnalysis.pairs) {
+    const pairData = routeAnalysis.pairs[pairId]
+
+    // Exclude pairs that are never in more than one hop.
+    //
+    if (Object.keys(pairData).length <= 1) {
+      continue
+    }
+
+    let firstHop = true
+    let maxSlippage = 0.0
+    for (let hopIdx = 0; hopIdx <= options.max_hops.value; hopIdx++) {
+      const pairHopData = pairData[hopIdx]
+      if (!pairHopData) {
+        continue
+      }
+      // log.debug(`Examining pair:\n${JSON.stringify(pairHopData, null, 2)}`)
+
+      for (const pairSegmentData of pairHopData) {
+        if (pairSegmentData.impact > maxSlippage) {
+          maxSlippage = pairSegmentData.impact
+        }
+      }
+
+      // Don't remove the pair if it's in the first hop we've found using this pair in any of the routes:
+      //
+      if (firstHop) {
+        //    - TODO: special case, pairs in the same hop but with different impacts (implies that they are different
+        //            paths).
+        //
+        firstHop = false
+        continue
+      }
+
+      // Remove routes that feature a pair further down the route that is used earlier and exceeds our
+      // slippage threshold:
+      //
+      if (maxSlippage > MAX_SLIPPAGE) {
+        for (const pairSegmentData of pairHopData) {
+          excludeRoutes.push(pairSegmentData.id)
+        }
+      }
+    }
+  }
+  log.debug(`Removing ${excludeRoutes.length} routes due to high-slippage pairs re-used downstream.\n`)
+  const filteredRoutes: t.VFRoutes = []
+  for (const routeId in routeAnalysis.routes) {
+    if (excludeRoutes.includes(routeId)) {
+      continue
+    }
+    filteredRoutes.push(routeAnalysis.routes[routeId].route)
+  }
+
+  return filteredRoutes
 }
 
 export const convertRoutesToLegacyFmt = (allPairData: t.Pairs, tokenData: t.Tokens, routes: t.VFRoutes): any => {

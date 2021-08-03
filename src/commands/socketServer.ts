@@ -17,6 +17,7 @@ import socketio from 'socket.io'
 import { v4 as uuidv4 } from 'uuid'
 import cytoscape from 'cytoscape'
 import crawl from 'tree-crawl'
+import { description } from 'commander'
 
 
 // TODO: back with Redis instead of mem
@@ -239,259 +240,180 @@ const _processRouteReq = async(reqType: string,
   }
 }
 
-const _processMultirouteReq = async(reqType: string,
-                                    uniData: t.UniData,
-                                    routeCache: RouteCache,
-                                    socket: socketio.Socket | undefined,
-                                    requestId: string,
-                                    source: string,
-                                    dest: string,
-                                    amount: string,
-                                    options: any): Promise<any> => 
+const _processMultiPathRouteReq = async(reqType: string,
+                                        _uniData: t.UniData,
+                                        _routeCache: RouteCache,
+                                        socket: socketio.Socket,
+                                        requestId: string,
+                                        source: string,
+                                        dest: string,
+                                        amount: string,
+                                        _options: any):Promise<any> =>
 {
-  const resultObj = await _processRouteReq(reqType, uniData, routeCache, socket, requestId, source, dest, amount, options)
-
-  r.annotateRoutesWithGainToDest(resultObj.routes)
-
-  /**
-   * TODO: before converting routes to a trading tree, filter them based on a minimum gain to dest criteria.
-   */
-
-  /**
-   *  The route analysis object allows us to quickly filter out routes that offer no splitting benefits as well as
-   *  filtering out routes that have high impact pairs further downstream (a later hop) that would impact trade estimates.
-   * 
-   *  Route Analysis Object:
-   *  {
-   *    routes: {
-   *      <id>: {
-   *        route: <route obj>,
-   *        yieldPct: <percentage>,
-   *      }
-   *    },
-   *    pairs: {
-   *      <pairId>: {
-   *        <hop>: [
-   *          { id: <route id>,
-   *            impact: <percentage>
-   *          }
-   *          ...
-   *        ],
-   *        ...
-   *      }
-   *    }
-   *  }
-   */
-  // let _routeIdCounter = 0
-  // const routeAnalysis: any = {
-  //   routes: {},
-  //   pairs: {}
-  // }
-  // const MIN_YIELD_PCT = 20.0
-  // for (const route of resultObj.routes) {
-  //   const firstSeg: t.VFSegment = route[0]
-  //   const lastSeg: t.VFSegment = route[route.length - 1]
-  //   let yieldPct: number = (firstSeg.srcUSD && lastSeg.dstUSD) ? 
-  //     100.0 * (parseFloat(lastSeg.dstUSD) / parseFloat(firstSeg.srcUSD)) : 0.0
-  //   if (yieldPct < MIN_YIELD_PCT) {
-  //     continue
-  //   }
-    
-  //   const routeId = _routeIdCounter++
-  //   routeAnalysis.routes[routeId] = {
-  //     route,
-  //     yieldPct
-  //   }
-
-  //   let hopIdx = 0
-  //   for (const seg of route) {
-  //     hopIdx++
-  //     const { pairId, impact } = seg
-  //     if (!routeAnalysis.pairs.hasOwnProperty(pairId)) {
-  //       routeAnalysis.pairs[pairId] = {}
-  //     }
-  //     if (!routeAnalysis.pairs[pairId].hasOwnProperty(hopIdx)) {
-  //       routeAnalysis.pairs[pairId][hopIdx] = []
-  //     }
-  //     routeAnalysis.pairs[pairId][hopIdx].push({
-  //       id: routeId,
-  //       impact: parseFloat(impact)
-  //     })
-  //   }
-  // }
-  // console.log(`Route analysis:\n` +
-  //             `================================================================================\n` +
-  //             `${JSON.stringify(routeAnalysis, null, 2)}`)
-  
-  // /* Now remove routes that re-use pairs with slippage above a threshold, n, in later route hops.
-  //  * i.e. If route 1 uses pair X in the first hop and route 2 uses pair X in the second hop, exclude
-  //  *      route 2.
-  //  * TODO: this could easily be done with a crawl of the tree and populating a dictionary (realized this
-  //  *       after writing the working code below) for later pruning of routes.
-  //  */
-  // const MAX_SLIPPAGE = 2.0    // Impact
-  // const excludeRoutes: string[] = []
-  // for (const pairId in routeAnalysis.pairs) {
-  //   const pairData = routeAnalysis.pairs[pairId]
-
-  //   // Exclude pairs that are never in more than one hop.
-  //   //
-  //   if (Object.keys(pairData).length <= 1) {
-  //     continue
-  //   }
-
-  //   let firstHop = true
-  //   let maxSlippage = 0.0
-  //   for (let hopIdx = 0; hopIdx <= options.max_hops.value; hopIdx++) {
-  //     const pairHopData = pairData[hopIdx]
-  //     if (!pairHopData) {
-  //       continue
-  //     }
-  //     // log.debug(`Examining pair:\n${JSON.stringify(pairHopData, null, 2)}`)
-
-  //     for (const pairSegmentData of pairHopData) {
-  //       if (pairSegmentData.impact > maxSlippage) {
-  //         maxSlippage = pairSegmentData.impact
-  //       }
-  //     }
-
-  //     // Don't remove the pair if it's in the first hop we've found using this pair in any of the routes:
-  //     //
-  //     if (firstHop) {
-  //       //    - TODO: special case, pairs in the same hop but with different impacts (implies that they are different
-  //       //            paths).
-  //       //
-  //       firstHop = false
-  //       continue
-  //     }
-
-  //     // Remove routes that feature a pair further down the route that is used earlier and exceeds our
-  //     // slippage threshold:
-  //     //
-  //     if (maxSlippage > MAX_SLIPPAGE) {
-  //       for (const pairSegmentData of pairHopData) {
-  //         excludeRoutes.push(pairSegmentData.id)
-  //       }
-  //     }
-  //   }
-  // }
-  // log.debug(`Removing ${excludeRoutes.length} routes due to high-slippage pairs re-used downstream.\n`)
-  // const filteredRoutes: t.VFRoutes = []
-  // for (const routeId in routeAnalysis.routes) {
-  //   if (excludeRoutes.includes(routeId)) {
-  //     continue
-  //   }
-  //   filteredRoutes.push(routeAnalysis.routes[routeId].route)
-  // }
-
-
-  // r.annotateRoutesWithSymbols(uniData.tokenData, filteredRoutes)
-  // const tradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(filteredRoutes)
-
-
-  r.annotateRoutesWithSymbols(uniData.tokenData, resultObj.routes)
-  const tradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(resultObj.routes)
-  const pruneTradeTree: r.TradeTreeNode | undefined = (tradeTree) ? r.cloneTradeTree(tradeTree) : undefined
-  // const pruneTradeTree: r.TradeTreeNode | undefined = r.buildTradeTree(resultObj.routes) 
-
-
-  // Prune the trade tree copy to only contain the top n routes:
+  // 1. Get the single path routes:
   //
-  const n = 10
-  let numRoutes = n
-  if (pruneTradeTree && pruneTradeTree.children) {
-    const routes: any = []
-    for (const child of pruneTradeTree.children) {
-      const { gainToDest } = child.value
-      if (gainToDest) {
-        for (const key in gainToDest) {
-          routes.push( { routeId: key, totalGain: gainToDest[key] })
-        }
-      }
-    }
-    routes.sort((a: any, b: any) => { return b.totalGain - a.totalGain })   // Descending sort
+  _options.multipath = true
+  _options.max_results.value = 20 
+  const { routes } = await _processRouteReq(reqType,
+                                            _uniData,
+                                            _routeCache,
+                                            socket,
+                                            requestId,
+                                            source,
+                                            dest,
+                                            amount,
+                                            _options)
+  r.annotateRoutesWithGainToDest(routes)
+  r.annotateRoutesWithSymbols(_uniData.tokenData, routes)
+  const routesTree: r.TradeTreeNode | undefined = r.buildTradeTree(routes)
 
-    const topRoutes: any = routes.splice(0, n)   // don't remove -- mutates routes for prune
-    numRoutes = topRoutes.length
-    for (const pruneRoute of routes) {
-      const { routeId, totalGain } = pruneRoute
-      r.pruneTreeRoute(pruneTradeTree, routeId)
-    }
-
-    // log.debug(`Post prune pruneTradeTree:\n` +
-    //           `--------------------------------------------------------------------------------\n`)
-    // let treeStr = ''
-    // let lastLevel: number | undefined = undefined
-    // crawl(pruneTradeTree, 
-    //       (node, context) => {
-    //         if (lastLevel !== context.level) {
-    //           treeStr += '\n'
-    //           lastLevel = context.level
-    //           treeStr += `(${lastLevel}): `
-    //         }
-    //         treeStr += `${(node.value.symbol ? node.value.symbol : '')}, `
-    //       },
-    //       { order: 'bfs'})
-    // log.debug(treeStr)
+  // 1.5 Get the Uniswap yield/output:
+  //
+  const uniRouteArr = routes.filter((route: t.VFRoute) => {
+    return route &&
+            route.length &&
+            route[0].isUni === true
+  })
+  let uniYield = {
+    usd: 0.0,
+    token: 0.0
+  }
+  if (uniRouteArr && uniRouteArr.length && uniRouteArr[0] && uniRouteArr[0].length) {
+    const uniRoute = uniRouteArr[0]
+    const lastUniSeg = uniRoute[uniRoute.length - 1]
+    uniYield.usd = lastUniSeg.dstUSD ? parseFloat(lastUniSeg.dstUSD) : 0.0
+    uniYield.token = lastUniSeg.dstAmount ? parseFloat(lastUniSeg.dstAmount) : 0.0
   }
 
-  let sum: any= {}
-  const costedTradeTree: r.TradeTreeNode | undefined = (pruneTradeTree) ? 
-      r.cloneTradeTree(pruneTradeTree) : undefined
-  if (costedTradeTree) {
-    await r.costTradeTree(uniData.pairData,
-                          uniData.tokenData,
+  // 2. Perform filtering and pruning of the single path routes
+  //
+  const prunedRoutes = r.pruneRoutes(routes, {maxRoutes: 10, minGainToDest: 0.05})
+  // TODO: look at re-enabling this:
+  // const filteredRoutes = r.removeRoutesWithLowerOrderPairs(prunedRoutes, _options)
+  const filteredRoutes = prunedRoutes
+  const filteredRoutesTree: r.TradeTreeNode | undefined = r.buildTradeTree(filteredRoutes)
+  let valveOnePathYield = {
+    usd: 0.0,
+    token: 0.0
+  }
+  if (filteredRoutes && filteredRoutes.length && filteredRoutes[0] && filteredRoutes[0].length) {
+    const bestRoute = filteredRoutes[0]
+    const lastSeg = bestRoute[bestRoute.length - 1]
+    valveOnePathYield.usd = lastSeg.dstUSD ? parseFloat(lastSeg.dstUSD) : 0.0
+    valveOnePathYield.token = lastSeg.dstAmount ? parseFloat(lastSeg.dstAmount) : 0.0
+  }
+
+
+  // 3. Construct a multi-path route:
+  //
+  let multiPathSums = {
+    usd: 0.0,
+    token: 0.0
+  }
+  const costedMultirouteTree: r.TradeTreeNode | undefined = r.cloneTradeTree(filteredRoutesTree)
+  if (costedMultirouteTree) {
+    await r.costTradeTree(_uniData.pairData,
+                          _uniData.tokenData,
                           amount,
-                          costedTradeTree,
-                          false /* update pair data */)
-    
-    if (uniData.wethPairData) {
-      await r.annotateTradeTreeWithUSD(uniData.pairData,
-                                      uniData.wethPairData,
-                                      costedTradeTree,
+                          costedMultirouteTree,
+                          false /* update pair data <-- TODO: tie to property */)
+
+    if (_uniData.wethPairData) {
+      await r.annotateTradeTreeWithUSD(_uniData.pairData,
+                                      _uniData.wethPairData,
+                                      costedMultirouteTree,
                                       false /* update pair data */)
     }
-    // Calculate the total quickly
-    crawl(costedTradeTree,
+
+    // Calculate the net result of the multi-route trade by summing
+    // all the leave nodes:
+    //
+    crawl(costedMultirouteTree,
           (node, context) => {
-            if (node.children.length === 0) {
-              if (node.value.trades) {
-                for (const tradeId in node.value.trades) {
-                  if (!sum.hasOwnProperty(tradeId)) {
-                    sum[tradeId] = 0
-                  }
-                  const trade = node.value.trades[tradeId]
-                  if (trade.outputUsd) {
-                    sum[tradeId] += parseFloat(trade.outputUsd)
-                  }
-                }
+            if (node.children.length === 0 && node.value.trades) {
+              // Multiple trades not yet supported, just use first property for now:
+              const properties = Object.keys(node.value.trades)
+              if (properties && properties.length) {
+                const tradeId = properties[0]
+                const trade = node.value.trades[tradeId]
+                multiPathSums.usd += parseFloat(trade.outputUsd)
+                multiPathSums.token += parseFloat(trade.outputAmount)
               }
             }
           },
           { order: 'pre' })
   }
 
+
+  // 4. Construct the pages object to return
+  //
+  const srcSymbol = _uniData.tokenData.getSymbol(source)
+  const dstSymbol = _uniData.tokenData.getSymbol(dest)
+
   let pages: any = []
   const useUuid = true
-  if (tradeTree) { 
-    const cyGraph: cytoscape.Core = r.tradeTreeToCyGraph(tradeTree, useUuid)
+  if (routesTree) { 
+    const cyGraph: cytoscape.Core = r.tradeTreeToCyGraph(routesTree, useUuid)
     pages.push({
-      description: 'Individual Routes Meeting Specified Criteria',
-      elements: r.elementDataFromCytoscape(cyGraph)
+      title: 'Individual Routes',
+      description: `Uniswap route output $${uniYield.usd} USD.`,
+      elements: r.elementDataFromCytoscape(cyGraph),
+      trade: {
+        isMultiroute: false,
+      }
     })
   }
-  if (pruneTradeTree) {
-    const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(pruneTradeTree, useUuid)
+  if (filteredRoutesTree) {
+    const delta = (uniYield.usd > 0) ?
+      100 * (valveOnePathYield.usd - uniYield.usd) / (uniYield.usd) : 0.0
+    const deltaStr = `(difference: ${delta > 0 ? '+' : ''}${delta.toFixed(3)}% UNI)`
+
+    const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(filteredRoutesTree, useUuid)
     pages.push({
-      description: `Top ${numRoutes} Routes`,
-      elements: r.elementDataFromCytoscape(cyGraphCopy)
+      title: `Top ${filteredRoutes.length} Individual Routes`,
+      description: `Valve best route output $${valveOnePathYield.usd} USD ${deltaStr}.`,
+      elements: r.elementDataFromCytoscape(cyGraphCopy),
+      trade: {
+        srcSymbol,
+        dstSymbol,
+        isMultiroute: false,
+        delta,
+        uni: {
+          usd: uniYield.usd,
+          tokens: uniYield.token
+        },
+        valve: {
+          usd: valveOnePathYield.usd,
+          tokens: valveOnePathYield.token
+        }
+      }
     })
   }
-  if (costedTradeTree) {
-    const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(costedTradeTree, useUuid)
+  if (costedMultirouteTree) {
+    const delta = (uniYield.usd > 0) ?
+      100 * (multiPathSums.usd - uniYield.usd) / (uniYield.usd) : 0.0
+    const deltaStr = `(difference: ${delta > 0 ? '+' : ''}${delta.toFixed(3)}% UNI)`
+
+    const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(costedMultirouteTree, useUuid)
     pages.push({
-      description: `Multi-Path Route, Returns: $${Object.values(sum).join(', ')}`,
-      elements: r.elementDataFromCytoscape(cyGraphCopy)
+      title: `Multi-Path Route`,
+      description: `Valve route output $${multiPathSums.usd} USD ${deltaStr}.` +
+                   `(Sum of leaf nodes.)`,
+      elements: r.elementDataFromCytoscape(cyGraphCopy),
+      trade: {
+        srcSymbol,
+        dstSymbol,
+        isMultiroute: true,
+        delta,
+        uni: {
+          usd: uniYield.usd,
+          tokens: uniYield.token
+        },
+        valve: {
+          usd: multiPathSums.usd,
+          tokens: multiPathSums.token
+        }
+      }
     })
   }
 
@@ -609,7 +531,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
       const reqType = 'multipath'
       socket.emit(reqType, { requestId, status: 'Analyzing input parameters.' })
 
-      // TODO: refactor with server.ts equivalent code
+      // TODO: refactor with server.ts equivalent code or ditch server.ts
       log.debug(`\nMultipath Route Request: ${amount} ${source} to ${dest}` +
                 `\n  options: ${JSON.stringify(options, null, 0)}\n`)
       
@@ -623,21 +545,20 @@ export const startSocketServer = async(port: string): Promise<void> => {
         socket.emit(reqType, { requestId, status: 'Error, input parameters are incorrect.', error: _error })
         return
       }
+
+      const pages = await _processMultiPathRouteReq(reqType,
+                                                    _uniData,
+                                                    _routeCache,
+                                                    socket,
+                                                    requestId,
+                                                    source,
+                                                    dest,
+                                                    amount,
+                                                    _options)
       
-      _options.multipath = true
-      _options.max_results.value = 100
 
-      const pages = await _processMultirouteReq(reqType,
-                                                _uniData,
-                                                _routeCache,
-                                                socket,
-                                                requestId,
-                                                source,
-                                                dest,
-                                                amount,
-                                                _options)
 
-      socket.emit('multipath', {
+      socket.emit(reqType, {
         requestId,
         pages
       })
@@ -651,7 +572,10 @@ export const startSocketServer = async(port: string): Promise<void> => {
     //   2. Compute trade performance of UNI default vs. multiroute
     //      of trades of 0.1 * X USD between those tokens.
     //
-    socket.on('report', (minPairLiquidity=100000000) => {
+    socket.on('report', async (minPairLiquidity=100000000) => {
+      const requestId = _getRequestId()
+      const reqType = 'report'
+      const amountUSD = (minPairLiquidity * 0.01).toFixed(3)
       const tokenSet: Set<string> = new Set<string>()
 
       // TODO: pair data return an iterator to the pairs:
@@ -665,6 +589,90 @@ export const startSocketServer = async(port: string): Promise<void> => {
       }
 
       log.debug(`Found ${tokenSet.size} tokens in pairs with > $${minPairLiquidity} USD liquidity.`)
+
+      const pages = []
+      let tradeCount = 0
+      let maxTrades = 20
+      const tokenArr = [...tokenSet]
+      for (let srcIdx = 0; 
+           (srcIdx < tokenSet.size && tradeCount < maxTrades);
+           srcIdx++) {
+        for (let dstIdx = 0;
+             (dstIdx < tokenSet.size && tradeCount < maxTrades);
+             dstIdx++) {
+          if (srcIdx === dstIdx) {
+            continue
+          }
+
+          tradeCount++
+          log.debug(`Processing trade ${tradeCount} of ${maxTrades}.`)
+          const src = tokenArr[srcIdx]
+          const dst = tokenArr[dstIdx]
+          if (!_uniData.wethPairData) {
+            continue
+          }
+          const amountSrc = r.getEstimatedTokensFromUSD(_uniData.pairData,
+                                                        _uniData.wethPairData,
+                                                        src,
+                                                        amountUSD)
+          const { options } = _preprocessRouteReq(src, dst, amountSrc)
+          options.max_results.value = 20
+          options.update_data.value = false
+          options.max_impact.value = 75
+          options.ignore_max_hops.value = true
+
+          log.debug(`Trade:\n` +
+                    `    source =  ${_uniData.tokenData.getSymbol(src.toLowerCase())}\n` +
+                    `    dest =    ${_uniData.tokenData.getSymbol(dst.toLowerCase())}\n` +
+                    `    amount =  ${amountSrc} (USD: $${amountUSD})\n` +
+                    `    options = ${JSON.stringify(options, null, 2)}\n`)
+          const tradePages = await _processMultiPathRouteReq(reqType,
+                                                             _uniData,
+                                                             _routeCache,
+                                                             socket,
+                                                             requestId,
+                                                             src,
+                                                             dst,
+                                                             amountSrc,
+                                                             options)
+          log.debug(`trade pages length = ${tradePages.length}`)
+          for (const page of tradePages) {
+            pages.push(page)
+          }
+        }
+      }
+
+      let titlePage = {
+        title: 'Report Summary',
+        description: `TBD ...`,
+        content: [''],
+        elements: []
+      }
+      titlePage.content.push('Single Route Data')
+      titlePage.content.push('========================================')
+      for (const page of pages)  {
+        if (page && page.trade && !page.trade.isMultiroute && page.trade.delta !== undefined) {
+          const { delta } = page.trade
+          const deltaStr = `${delta >= 0 ? '+' : ''}${delta.toFixed(3)}%`
+          titlePage.content.push(`${deltaStr}  ${page.trade.srcSymbol} -> ${page.trade.dstSymbol} ($${page.trade.valve.usd} USD)`)
+        }
+      }
+      titlePage.content.push('')
+      titlePage.content.push('Multi-Route Data')
+      titlePage.content.push('========================================')
+      for (const page of pages)  {
+        if (page && page.trade && page.trade.isMultiroute && page.trade.delta !== undefined) {
+          const { delta } = page.trade
+          const deltaStr = `${delta >= 0 ? '+' : ''}${delta.toFixed(3)}%`
+          titlePage.content.push(`${deltaStr}  ${page.trade.srcSymbol} -> ${page.trade.dstSymbol} ($${page.trade.valve.usd} USD)`)
+        }
+      }
+      pages.unshift(titlePage)
+
+      socket.emit(reqType, {
+        requestId,
+        pages
+      })
     })
 
     socket.on('disconnect', (reason: string) => {
