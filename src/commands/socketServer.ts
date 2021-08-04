@@ -403,8 +403,8 @@ const _processMultiPathRouteReq = async(reqType: string,
     const cyGraphCopy: cytoscape.Core = rv.getCytoscapeGraph(costedMultirouteTree)
     pages.push({
       title: `Multi-Path Route`,
-      description: `Valve route output $${multiPathSums.usd} USD ${deltaStr}.` +
-                   `(Sum of leaf nodes.)`,
+      description: `Valve multi route output $${multiPathSums.usd.toFixed(2)} USD ${deltaStr}`,
+      description2: `Yield difference: ${delta > 0 ? '+' : ''}$${(multiPathSums.usd - uniYield.usd).toFixed(2)}`,
       elements: rv.elementDataFromCytoscape(cyGraphCopy),
       trade: {
         srcSymbol,
