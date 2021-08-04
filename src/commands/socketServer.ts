@@ -362,7 +362,7 @@ const _processMultiPathRouteReq = async(reqType: string,
     const cyGraph: cytoscape.Core = rv.getCytoscapeGraph(routesTree)
     pages.push({
       title: 'Individual Routes',
-      description: `Uniswap route output $${uniYield.usd} USD.`,
+      description: [{text: `Uniswap route output $${uniYield.usd} USD.`}],
       elements: rv.elementDataFromCytoscape(cyGraph),
       trade: {
         isMultiroute: false,
@@ -377,7 +377,7 @@ const _processMultiPathRouteReq = async(reqType: string,
     const cyGraphCopy: cytoscape.Core = rv.getCytoscapeGraph(filteredRoutesTree)
     pages.push({
       title: `Top ${filteredRoutes.length} Individual Routes`,
-      description: `Valve best route output $${valveOnePathYield.usd} USD ${deltaStr}.`,
+      description: [{text: `Valve best route output $${valveOnePathYield.usd} USD ${deltaStr}.`}],
       elements: rv.elementDataFromCytoscape(cyGraphCopy),
       trade: {
         srcSymbol,
@@ -403,8 +403,8 @@ const _processMultiPathRouteReq = async(reqType: string,
     const cyGraphCopy: cytoscape.Core = rv.getCytoscapeGraph(costedMultirouteTree)
     pages.push({
       title: `Multi-Path Route`,
-      description: `Valve multi route output $${multiPathSums.usd.toFixed(2)} USD ${deltaStr}`,
-      description2: `Yield difference: ${delta > 0 ? '+' : ''}$${(multiPathSums.usd - uniYield.usd).toFixed(2)}`,
+      description: [{text: `Valve multi route output $${multiPathSums.usd.toFixed(2)} USD ${deltaStr}`},
+                    {text: `Yield difference: ${delta > 0 ? '+' : ''}$${(multiPathSums.usd - uniYield.usd).toFixed(2)}`, textStyle: 'bold'}],
       elements: rv.elementDataFromCytoscape(cyGraphCopy),
       trade: {
         srcSymbol,
