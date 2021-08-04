@@ -79,7 +79,9 @@ export const getCytoscapeGraph = (tradeTree: TradeTreeNode,
               const impact = parseFloat(node.value.impact ? node.value.impact : '0').toFixed(3)
               // const label = `$${node.value.amountUSD},  ${impact}%`
               const label = `${impact}%`
-              const color = (parent.value.isUniRoute && node.value.isUniRoute) ?
+              const color = (parent.value.isUniRoute &&
+                             node.value.isUniRoute &&
+                             !isMultiPath) ?
                              PATH_COLORS.UNI_EDGE : PATH_COLORS.DEFAULT_EDGE
 
               let parentNodeId = parent.value.id
