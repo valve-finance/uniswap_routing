@@ -36,11 +36,6 @@ export const getUniRouteV2 = async (source: string, destination: string, amount:
     })
 
     const uniswapPairFactory = await uniswapPair.createFactory()
-    // const provider = new ethers.providers.JsonRpcProvider(
-    //   uniswapPairFactory.providerUrl
-    // )
-
-    // TODO: probably want to cache this for ~block time (15s)
     const trade = await uniswapPairFactory.trade(amount.toString())
 
     routeObj.uniswapVersion = trade.uniswapVersion
@@ -50,7 +45,7 @@ export const getUniRouteV2 = async (source: string, destination: string, amount:
     routeObj.routePathTokenMap = trade.routePathTokenMap
     trade.destroy()
   } catch (error) {
-    log.warn(`getUniRouteV2 failed.\n${error}`)
+    log.warn(`getUniRouteV2 failed. Ensure you have an internet connection. Reported error:\n${error}`)
   }
 
   return routeObj 

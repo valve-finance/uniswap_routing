@@ -1,12 +1,16 @@
 import * as ds from './../utils/debugScopes'
 import * as t from './../utils/types'
 import { sanitizeProperty, sanitizePropertyType } from '../utils/misc'
-import * as r from './../utils/routing'
+import * as rg from '../routing/routeGraph'
+import * as rt from '../routing/routeTree'
+import * as rv from '../routing/routeVisualization'
 import * as c from './../utils/constants'
+import { getEstimatedTokensFromUSD } from '../routing/quoting'
 import { initUniData } from '../utils/data'
-import { RouteCache } from '../routeCache'
+import { RouteCache } from '../routing/routeCache'
 import { getUniRouteV2 } from '../utils/uniswapSDK'
 import { deepCopy } from '../utils/misc'
+import { quoteRoutes } from '../routing/quoting'
 
 import express from 'express'
 import http from 'http'
@@ -17,7 +21,6 @@ import socketio from 'socket.io'
 import { v4 as uuidv4 } from 'uuid'
 import cytoscape from 'cytoscape'
 import crawl from 'tree-crawl'
-import { description } from 'commander'
 
 
 // TODO: back with Redis instead of mem
@@ -139,80 +142,84 @@ const _processRouteReq = async(reqType: string,
                                    .catch(error => { return {} })
   
   const _results = await Promise.all([_routesP, _uniRouteP])
-  const _routesImmutable: t.VFRoutes = _results[0]    // <-- TODO: cleanup route cache to dc routes by default.
-  const _routes = deepCopy(_routesImmutable)
+  const _routes: t.VFRoutes = deepCopy(_results[0])    // <-- TODO: cleanup route 
+                                                       //           cache to dc routes by default.
   const _uniRoute: any = _results[1]
 
   /**
    *    Tag the official UNI route and insert it if it's not in the cach result, so that
    *    it gets costed.
    */
-  let foundUniRoute = false
-  const uniRoutePathAsStr = _uniRoute.routePath.join(',').toLowerCase()
-  for (const _route of _routes) {
-    const _routePath: string[] = []
+  if (_uniRoute && _uniRoute.routePath && _uniRoute.routePath.length > 0) {
+    let foundUniRoute = false
+    const uniRoutePathAsStr = _uniRoute.routePath.join(',').toLowerCase()
+    for (const _route of _routes) {
+      const _routePath: string[] = []
 
-    for (let idx = 0; idx < _route.length; idx++) {
-      const _seg: t.VFSegment = _route[idx]
-      if (idx === 0) {
-        _routePath.push(_seg.src)
+      for (let idx = 0; idx < _route.length; idx++) {
+        const _seg: t.VFSegment = _route[idx]
+        if (idx === 0) {
+          _routePath.push(_seg.src)
+        }
+        _routePath.push(_seg.dst)
       }
-      _routePath.push(_seg.dst)
+
+      if (_routePath.join(',').toLowerCase() === uniRoutePathAsStr) {
+        foundUniRoute = true
+        _route.forEach((_seg: t.VFSegment) => _seg.isUni = true)
+
+        // TODO TODO: To check our work w/ quotes, compare the value of
+        //            _uniRoute.expectedConvertQuote to the amount in the 
+        //            last seg if data updates are turned on
+        break
+      }
     }
 
-    if (_routePath.join(',').toLowerCase() === uniRoutePathAsStr) {
-      foundUniRoute = true
-      _route.forEach((_seg: t.VFSegment) => _seg.isUni = true)
+    if (!foundUniRoute) {
+      log.warn(`Uni route not in results, building and adding.`)
+      try {
+        const newRoute: t.VFRoute = []
+        for (let idx = 0; idx < _uniRoute.routePath.length-1; idx++) {
+          const src = _uniRoute.routePath[idx].toLowerCase()
+          const dst = _uniRoute.routePath[idx].toLowerCase()
 
-      // TODO TODO: To check our work w/ quotes, compare the value of
-      //            _uniRoute.expectedConvertQuote to the amount in the 
-      //            last seg if data updates are turned on
-      break
-    }
-  }
-
-  if (!foundUniRoute) {
-    log.warn(`Uni route not in results, building and adding.`)
-    try {
-      const newRoute: t.VFRoute = []
-      for (let idx = 0; idx < _uniRoute.routePath.length-1; idx++) {
-        const src = _uniRoute.routePath[idx].toLowerCase()
-        const dst = _uniRoute.routePath[idx].toLowerCase()
-
-        const edgeData: any = uniData.pairGraph.edge(src, dst)
-        let pairId = ''
-        if (edgeData && edgeData.hasOwnProperty('pairIds') ) {
-          if (edgeData.pairIds.length >= 1) {
-            pairId = edgeData.pairIds[0]
+          const edgeData: any = uniData.pairGraph.edge(src, dst)
+          let pairId = ''
+          if (edgeData && edgeData.hasOwnProperty('pairIds') ) {
+            if (edgeData.pairIds.length >= 1) {
+              pairId = edgeData.pairIds[0]
+            }
+            if (edgeData.pairIds.length !== 1)  {
+              log.warn(`Building UNI route, edge data pairIds length is ${edgeData.pairIds.length} for ${src} to ${dst}.`)
+            }
+          } else {
+            throw Error(`Unable to build UNI route; no edge data or pairIds for edge ${src} to ${dst}`)
           }
-          if (edgeData.pairIds.length !== 1)  {
-            log.warn(`Building UNI route, edge data pairIds length is ${edgeData.pairIds.length} for ${src} to ${dst}.`)
-          }
-        } else {
-          throw Error(`Unable to build UNI route; no edge data or pairIds for edge ${src} to ${dst}`)
+
+          newRoute.push({
+            src,
+            dst,
+            pairId,
+            isUni: true
+          })
         }
 
-        newRoute.push({
-          src,
-          dst,
-          pairId,
-          isUni: true
-        })
+        _routes.push(newRoute)
+      } catch (error) {
+        log.error(error)
       }
-
-      _routes.push(newRoute)
-    } catch (error) {
-      log.error(error)
     }
+  } else {
+    log.warn(`No UNI route available for ${amount} ${source} --> ${dest}.`)
   }
 
   socket && socket.emit(reqType, { requestId, status: 'Getting price quotes.', })
-  const _costedRoutes: t.VFRoutes = await r.costRoutes(uniData.pairData, 
-                                                       uniData.tokenData,
-                                                       _routes,
-                                                       amount,
-                                                       options.max_impact.value,
-                                                       options.update_data.value)
+  const _costedRoutes: t.VFRoutes = await quoteRoutes(uniData.pairData, 
+                                                     uniData.tokenData,
+                                                     _routes,
+                                                     amount,
+                                                     options.max_impact.value,
+                                                     options.update_data.value)
 
   _costedRoutes.sort((a: t.VFRoute, b: t.VFRoute) => {    // Sort descending by amount of destination token received
     const aLastDstAmount = a[a.length-1].dstAmount
@@ -223,7 +230,7 @@ const _processRouteReq = async(reqType: string,
   })
   const _requestedCostedRoutes: t.VFRoutes = _costedRoutes.slice(0, options.max_results.value)
   if (uniData.wethPairData) {
-    await r.annotateRoutesWithUSD(uniData.pairData,
+    await rg.annotateRoutesWithUSD(uniData.pairData,
                                   uniData.wethPairData,
                                   _requestedCostedRoutes,
                                   options.update_data.value)
@@ -233,7 +240,7 @@ const _processRouteReq = async(reqType: string,
     const resultObj = { requestId, routes: _requestedCostedRoutes }
     return resultObj
   } else {
-    const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(uniData.pairData, uniData.tokenData, _requestedCostedRoutes)
+    const _legacyFmtRoutes = rg.convertRoutesToLegacyFmt(uniData.pairData, uniData.tokenData, _requestedCostedRoutes)
     const resultObj = { requestId, status: 'Completed request.', routes: _legacyFmtRoutes, uniRoute: _uniRoute.routeText }
     socket && socket.emit(reqType, resultObj)
     return resultObj
@@ -263,9 +270,9 @@ const _processMultiPathRouteReq = async(reqType: string,
                                             dest,
                                             amount,
                                             _options)
-  r.annotateRoutesWithGainToDest(routes)
-  r.annotateRoutesWithSymbols(_uniData.tokenData, routes)
-  const routesTree: r.TradeTreeNode | undefined = r.buildTradeTree(routes)
+  rg.annotateRoutesWithGainToDest(routes)
+  rg.annotateRoutesWithSymbols(_uniData.tokenData, routes)
+  const routesTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(routes)
 
   // 1.5 Get the Uniswap yield/output:
   //
@@ -287,11 +294,11 @@ const _processMultiPathRouteReq = async(reqType: string,
 
   // 2. Perform filtering and pruning of the single path routes
   //
-  const prunedRoutes = r.pruneRoutes(routes, {maxRoutes: 10, minGainToDest: 0.05})
+  const prunedRoutes = rg.pruneRoutes(routes, {maxRoutes: 10, minGainToDest: 0.05})
   // TODO: look at re-enabling this:
-  // const filteredRoutes = r.removeRoutesWithLowerOrderPairs(prunedRoutes, _options)
+  // const filteredRoutes = rg.removeRoutesWithLowerOrderPairs(prunedRoutes, _options)
   const filteredRoutes = prunedRoutes
-  const filteredRoutesTree: r.TradeTreeNode | undefined = r.buildTradeTree(filteredRoutes)
+  const filteredRoutesTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(filteredRoutes)
   let valveOnePathYield = {
     usd: 0.0,
     token: 0.0
@@ -310,19 +317,19 @@ const _processMultiPathRouteReq = async(reqType: string,
     usd: 0.0,
     token: 0.0
   }
-  const costedMultirouteTree: r.TradeTreeNode | undefined = r.cloneTradeTree(filteredRoutesTree)
+  const costedMultirouteTree: rt.TradeTreeNode | undefined = rt.cloneTradeTree(filteredRoutesTree)
   if (costedMultirouteTree) {
-    await r.costTradeTree(_uniData.pairData,
-                          _uniData.tokenData,
-                          amount,
-                          costedMultirouteTree,
-                          false /* update pair data <-- TODO: tie to property */)
+    await rt.costTradeTree(_uniData.pairData,
+                           _uniData.tokenData,
+                           amount,
+                           costedMultirouteTree,
+                           false /* update pair data <-- TODO: tie to property */)
 
     if (_uniData.wethPairData) {
-      await r.annotateTradeTreeWithUSD(_uniData.pairData,
-                                      _uniData.wethPairData,
-                                      costedMultirouteTree,
-                                      false /* update pair data */)
+      await rt.annotateTradeTreeWithUSD(_uniData.pairData,
+                                        _uniData.wethPairData,
+                                        costedMultirouteTree,
+                                        false /* update pair data */)
     }
 
     // Calculate the net result of the multi-route trade by summing
@@ -336,7 +343,7 @@ const _processMultiPathRouteReq = async(reqType: string,
               if (properties && properties.length) {
                 const tradeId = properties[0]
                 const trade = node.value.trades[tradeId]
-                multiPathSums.usd += parseFloat(trade.outputUsd)
+                multiPathSums.usd += trade.outputUsd ? parseFloat(trade.outputUsd) : 0.0
                 multiPathSums.token += parseFloat(trade.outputAmount)
               }
             }
@@ -351,13 +358,12 @@ const _processMultiPathRouteReq = async(reqType: string,
   const dstSymbol = _uniData.tokenData.getSymbol(dest)
 
   let pages: any = []
-  const useUuid = true
   if (routesTree) { 
-    const cyGraph: cytoscape.Core = r.tradeTreeToCyGraph(routesTree, useUuid)
+    const cyGraph: cytoscape.Core = rv.getCytoscapeGraph(routesTree)
     pages.push({
       title: 'Individual Routes',
       description: `Uniswap route output $${uniYield.usd} USD.`,
-      elements: r.elementDataFromCytoscape(cyGraph),
+      elements: rv.elementDataFromCytoscape(cyGraph),
       trade: {
         isMultiroute: false,
       }
@@ -368,11 +374,11 @@ const _processMultiPathRouteReq = async(reqType: string,
       100 * (valveOnePathYield.usd - uniYield.usd) / (uniYield.usd) : 0.0
     const deltaStr = `(difference: ${delta > 0 ? '+' : ''}${delta.toFixed(3)}% UNI)`
 
-    const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(filteredRoutesTree, useUuid)
+    const cyGraphCopy: cytoscape.Core = rv.getCytoscapeGraph(filteredRoutesTree)
     pages.push({
       title: `Top ${filteredRoutes.length} Individual Routes`,
       description: `Valve best route output $${valveOnePathYield.usd} USD ${deltaStr}.`,
-      elements: r.elementDataFromCytoscape(cyGraphCopy),
+      elements: rv.elementDataFromCytoscape(cyGraphCopy),
       trade: {
         srcSymbol,
         dstSymbol,
@@ -394,12 +400,12 @@ const _processMultiPathRouteReq = async(reqType: string,
       100 * (multiPathSums.usd - uniYield.usd) / (uniYield.usd) : 0.0
     const deltaStr = `(difference: ${delta > 0 ? '+' : ''}${delta.toFixed(3)}% UNI)`
 
-    const cyGraphCopy: cytoscape.Core = r.tradeTreeToCyGraph(costedMultirouteTree, useUuid)
+    const cyGraphCopy: cytoscape.Core = rv.getCytoscapeGraph(costedMultirouteTree)
     pages.push({
       title: `Multi-Path Route`,
       description: `Valve route output $${multiPathSums.usd} USD ${deltaStr}.` +
                    `(Sum of leaf nodes.)`,
-      elements: r.elementDataFromCytoscape(cyGraphCopy),
+      elements: rv.elementDataFromCytoscape(cyGraphCopy),
       trade: {
         srcSymbol,
         dstSymbol,
@@ -491,7 +497,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
       const reqType = 'route'
       socket.emit(reqType, { requestId, status: 'Analyzing input parameters.' })
 
-      // TODO: refactor with server.ts equivalent code
+      // TODO: refactor with serverg.ts equivalent code
       log.debug(`\nRoute Request: ${amount} ${source} to ${dest}` +
                 `\n  options: ${JSON.stringify(options, null, 0)}\n`)
       
@@ -514,10 +520,10 @@ export const startSocketServer = async(port: string): Promise<void> => {
       let tokens = ''
 
       if (!isNaN(parseFloat(usdAmount)) && _uniData.wethPairData) {
-        tokens = r.getEstimatedTokensFromUSD(_uniData.pairData,
-                                             _uniData.wethPairData,
-                                             source.toLowerCase(),
-                                             usdAmount)
+        tokens = getEstimatedTokensFromUSD(_uniData.pairData,
+                                           _uniData.wethPairData,
+                                           source.toLowerCase(),
+                                           usdAmount)
       }
 
       socket.emit('usdTokenQuote', {tokens})
@@ -531,7 +537,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
       const reqType = 'multipath'
       socket.emit(reqType, { requestId, status: 'Analyzing input parameters.' })
 
-      // TODO: refactor with server.ts equivalent code or ditch server.ts
+      // TODO: refactor with serverg.ts equivalent code or ditch serverg.ts
       log.debug(`\nMultipath Route Request: ${amount} ${source} to ${dest}` +
                 `\n  options: ${JSON.stringify(options, null, 0)}\n`)
       
@@ -611,10 +617,10 @@ export const startSocketServer = async(port: string): Promise<void> => {
           if (!_uniData.wethPairData) {
             continue
           }
-          const amountSrc = r.getEstimatedTokensFromUSD(_uniData.pairData,
-                                                        _uniData.wethPairData,
-                                                        src,
-                                                        amountUSD)
+          const amountSrc = getEstimatedTokensFromUSD(_uniData.pairData,
+                                                      _uniData.wethPairData,
+                                                      src,
+                                                      amountUSD)
           const { options } = _preprocessRouteReq(src, dst, amountSrc)
           options.max_results.value = 20
           options.update_data.value = false

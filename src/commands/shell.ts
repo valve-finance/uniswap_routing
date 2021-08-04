@@ -1,7 +1,8 @@
 import * as ds from './../utils/debugScopes'
 import * as t from './../utils/types'
-import * as r from './../utils/routing'
+import * as r from '../routing/routeGraph'
 import { initUniData } from '../utils/data'
+import { quoteRoutes } from '../routing/quoting'
 
 import * as readline from 'readline'
 
@@ -98,10 +99,10 @@ export const shell = async(): Promise<void> => {
 
           const _routes = r.unstackRoutes(_stackedRoutes)
 
-          const _costedRoutes = await r.costRoutes(_uniData.pairData,
-                                                   _uniData.tokenData,
-                                                   _routes, amtPayToken,
-                                                   _settings['maxImpact'].value)
+          const _costedRoutes = await quoteRoutes(_uniData.pairData,
+                                                  _uniData.tokenData,
+                                                  _routes, amtPayToken,
+                                                  _settings['maxImpact'].value)
           // log.info(`Routes:\n${JSON.stringify(_costedRoutes, null, 2)}`)
           
           const _legacyFmtRoutes = r.convertRoutesToLegacyFmt(_uniData.pairData,

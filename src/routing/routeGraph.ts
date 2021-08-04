@@ -1,0 +1,543 @@
+import * as ds from '../utils/debugScopes'
+import * as t from '../utils/types'
+import { WETH_ADDR, USDC_ADDR, WETH_ADDRS_LC } from '../utils/constants'
+import { getUpdatedPairData } from '../graphProtocol/uniswapV2'
+import { filterToPairIdsOfAge, getEstimatedUSD } from './quoting'
+
+const log = ds.getLog('routeGraph')
+
+
+
+// New slightly more optimized alg.: 
+//
+const _routeSearch = (g: t.PairGraph, 
+                     hops: number, 
+                     constraints: t.Constraints,
+                     route: any, 
+                     rolledRoutes: t.VFStackedRoutes,
+                     prevOriginAddr: string,
+                     originAddr: string, 
+                     destAddr: string): void => 
+{
+  let neighbors = g.neighbors(originAddr)
+  hops++
+
+  for (const neighbor of neighbors) {
+    if (neighbor === destAddr) {
+      // Optimization: rather than make this a mulitgraph, represent all pairs in a single edge and
+      //               store their ids as a property of that edge.
+      const _route: any = [...route, { src: originAddr, dst: neighbor, pairIds: g.edge(originAddr, neighbor).pairIds }]
+      rolledRoutes.push(_route)
+    } else if (constraints.maxDistance && hops < constraints.maxDistance) {
+      if (neighbor === originAddr ||
+          neighbor === prevOriginAddr ||    // Prevent cycle back to last origin addr (i.e. FEI TRIBE cycle of FEI > WETH > FEI > TRIBE).
+                                            // We limit max hops to 3 so cycles like FEI > x > y > FEI aren't
+                                            // a consideration (otherwise we'd need to expand this search's
+                                            // memory of previous visits.)
+          (constraints.ignoreTokenIds && constraints.ignoreTokenIds.includes(neighbor))) {
+        continue
+      }
+
+      // Optimization: rather than make this a mulitgraph, represent all pairs in a single edge and
+      //               store their ids as a property of that edge.
+      const _route: any = [...route, { src: originAddr, dst: neighbor, pairIds: g.edge(originAddr, neighbor).pairIds }]
+      _routeSearch(g, 
+                   hops,
+                   constraints,
+                   _route,
+                   rolledRoutes,
+                   originAddr,
+                   neighbor,
+                   destAddr)
+    }
+  }
+}
+
+export const findRoutes = (pairGraph: t.PairGraph,
+                           srcAddr: string,
+                           dstAddr: string,
+                           constraints?: t.Constraints,
+                           verbose?: boolean): t.VFStackedRoutes =>
+{
+  let rolledRoutes: t.VFStackedRoutes= []
+
+  const _defaultConstrs: t.Constraints = {
+    maxDistance: 2
+  }
+  const _constraints: t.Constraints = {..._defaultConstrs, ...constraints}
+
+  if (!srcAddr || !dstAddr) {
+    log.error(`A source token address(${srcAddr}) and destination token ` +
+              `address(${dstAddr}) are required.`)
+    return rolledRoutes
+  }
+  const _srcAddrLC = srcAddr.toLowerCase()
+  const _dstAddrLC = dstAddr.toLowerCase()
+
+  // Special case: routing from WETH as source, reduce max hops to 1 as this starting node has 30k+
+  //               neighbors and doesn't finish in reasonable time.
+  if (WETH_ADDRS_LC.includes(_srcAddrLC)) {
+    log.debug(`findRoutes:  detected routing from wETH, reducing max hops to 1.`)
+    _constraints.maxDistance = 1
+  }
+
+  if (_srcAddrLC === _dstAddrLC) {
+    log.error(`Money laundering not supported (same token routes, ${srcAddr} -> ${dstAddr}).`)
+  }
+
+  if (!pairGraph.hasNode(_srcAddrLC)) {
+    log.error(`Source token address, ${srcAddr}, is not in the graph.`)
+    return rolledRoutes
+  }
+  if (!pairGraph.hasNode(_dstAddrLC)) {
+    log.error(`Destination token address, ${dstAddr}, is not in the graph.`)
+    return rolledRoutes
+  }
+
+  if (_constraints.ignoreTokenIds && _constraints.ignoreTokenIds.includes(_srcAddrLC)) {
+    log.error(`Source token address, ${srcAddr}, is constrained out of the route search.`)
+    return rolledRoutes
+  }
+  if (_constraints.ignoreTokenIds && _constraints.ignoreTokenIds.includes(_srcAddrLC)) {
+    log.error(`Destination token address, ${dstAddr}, is constrained out of the route search.`)
+    return rolledRoutes
+  }
+
+  if (verbose) {
+    log.info(`Finding routes from token ${srcAddr} to token ${dstAddr} ...`)
+  }
+
+  let hops = 0
+  let route: any = []
+  _routeSearch(pairGraph,
+               hops,
+               _constraints,
+               route,
+               rolledRoutes,
+               '',
+               _srcAddrLC,
+               _dstAddrLC)
+
+  rolledRoutes.sort((a: any, b:any) => {
+    return a.length - b.length    // Ascending order by route length
+  })
+
+  return rolledRoutes
+}
+
+export const routesToString = (rolledRoutes: t.VFStackedRoutes, tokenData: t.Tokens): string => 
+{
+  let _routeStr: string = '\n'
+
+  let _routeNum = 0
+  for (const _route of rolledRoutes) {
+    _routeStr += `Route ${++_routeNum}:\n` +
+                `----------------------------------------\n`
+    for (const _pair of _route) {
+      let srcStr = _pair.src
+      let dstStr = _pair.dst
+      if (tokenData) {
+        srcStr += ` (${tokenData.getSymbol(_pair.src)})`
+        dstStr += ` (${tokenData.getSymbol(_pair.dst)})`
+      }
+
+      _routeStr += `  ${srcStr} --> ${dstStr}, ${_pair.pairIds.length} pairs:\n`
+      for (const _pairId of _pair.pairIds) {
+        _routeStr += `      ${_pairId}\n`
+      }
+    }
+    _routeStr += '\n'
+  }
+
+  return _routeStr
+}
+
+export const unstackRoutes = (stackedRoutes: t.VFStackedRoutes): t.VFRoutes =>
+{
+  let routes: t.VFRoutes= []
+
+  for (const stackedRoute of stackedRoutes) {
+    // Unstack the route by determining the number of pairs in each segment and
+    // then constructing all possible routes implied by the stacked pairs of each
+    // segment. For example considering the following stacked route:
+    //
+    //   src --> segment1 --> segment2 --> dst
+    //              p1           p2
+    //                           p3
+    //
+    // The algorithm herein 'unstacks' this route creating two routes, implied
+    // by the stacked pairs:
+    //
+    //  src --> p1 --> p2 --> dst
+    //
+    //  src --> p1 --> p3 --> dst
+    //
+    const segmentPairCounts: number[] = []    // Count of number of pairs in each segment.
+    const segmentPairIndices: number[] = []   // Indices to be used in the conversion described 
+                                              // in the comment above.
+    for (let idx = 0; idx < stackedRoute.length; idx++) {
+      segmentPairCounts[idx] = stackedRoute[idx].pairIds.length
+      segmentPairIndices[idx] = 0
+    }
+
+    while (segmentPairIndices[segmentPairIndices.length-1] < segmentPairCounts[segmentPairCounts.length-1]) {
+      const route: t.VFRoute = []
+      for (let segIdx = 0; segIdx < stackedRoute.length; segIdx++) {
+        const stackedSegment = stackedRoute[segIdx]
+        const pairIndex = segmentPairIndices[segIdx]
+        const pairId = stackedSegment.pairIds[pairIndex]
+
+        const segment: t.VFSegment = {
+          src: stackedSegment.src,
+          dst: stackedSegment.dst,
+          pairId
+        }
+
+        route.push(segment)
+      }
+
+      routes.push(route)
+
+      // Ingrement the pair indices for the segments.  (Basically a counter that counts to the number of
+      // pairs for each segment, then incrementing the pair index of the next segment when the number of
+      // pairs for the previous segment is reached.):
+      //
+      for (let segIdx = 0; segIdx < stackedRoute.length; segIdx++) {
+        segmentPairIndices[segIdx]++
+        if ((segmentPairIndices[segIdx] < segmentPairCounts[segIdx]) || (segIdx === stackedRoute.length - 1)) {
+          break
+        } else {
+          segmentPairIndices[segIdx] = 0
+        }
+      }
+    }
+  }
+  
+  return routes
+}
+
+export const annotateRoutesWithUSD = async (allPairData: t.Pairs,
+                                            wethPairDict: t.WethPairIdDict,
+                                            routes: t.VFRoutes,
+                                            updatePairData: boolean=true): Promise<void> => {
+  if (updatePairData) {
+    const start: number = Date.now()
+    // Get all the <token>:WETH pair IDs, get the WETH/USDC pair ID
+    //
+    const pairIdsUSD: Set<string> = new Set<string>()
+    for (const route of routes) {
+      for (const seg of route) {
+        if (seg.src !== WETH_ADDR) {
+          pairIdsUSD.add(wethPairDict[seg.src])
+        }
+
+        if (seg.dst !== WETH_ADDR) {
+          pairIdsUSD.add(wethPairDict[seg.dst])
+        }
+      }
+    }
+    pairIdsUSD.add(wethPairDict[USDC_ADDR])
+
+    const pairIdsToUpdate = filterToPairIdsOfAge(allPairData, pairIdsUSD)
+    const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
+    const updateTimeMs = Date.now()
+    allPairData.updatePairs(updatedPairs, updateTimeMs)
+    log.debug(`annotateRoutesWithUSD: Finished updating ${pairIdsToUpdate.size} pairs in ${Date.now() - start} ms`)
+  }
+
+  for (const route of routes) {
+    for (const segment of route) {
+      if (segment.srcAmount) {
+        segment.srcUSD = getEstimatedUSD(allPairData, wethPairDict, segment.src, segment.srcAmount)
+      }
+      if (segment.dstAmount) {
+        segment.dstUSD = getEstimatedUSD(allPairData, wethPairDict, segment.dst, segment.dstAmount)
+      }
+    }
+  }
+}
+
+export const annotateRoutesWithSymbols = (tokenData: t.Tokens, 
+                                          routes: t.VFRoutes,
+                                          includeIdLast4: boolean = false): void => {
+  for (const route of routes) {
+    for (const seg of route) {
+      seg.srcSymbol = tokenData.getSymbol(seg.src)
+      seg.dstSymbol = tokenData.getSymbol(seg.dst)
+      if (includeIdLast4) {
+        seg.srcSymbol += ` (${seg.src.substr(seg.src.length-1-4, 4)})`
+        seg.dstSymbol += ` (${seg.dst.substr(seg.dst.length-1-4, 4)})`
+      }
+    }
+  }
+}
+
+export const annotateRoutesWithGainToDest = (routes: t.VFRoutes): void => {
+  /**
+   * Annotate routes with their gain at each segment to final destination.  The gain of one segment to the
+   * the destination is (1 - impact).  The gain through two segments to the destination is (1 - impact_seg1) * (1 - impact_seg2).
+   * If you take the amount in to the trade and multiply it by the gain, you know how much you'll receive at
+   * the completion of the transaction.  The gain to destination is useful in understanding if a multi-segment path
+   * is better than an adjacent path.
+   */
+  for (const route of routes) {
+    let gainToDest: undefined | number = undefined
+    for (let segIdx = route.length - 1; segIdx >= 0; segIdx--) {
+      const seg: t.VFSegment = route[segIdx]
+      const impact = (seg.impact === undefined) ? 0.0 : (parseFloat(seg.impact) / 100.0)
+      const gain = 1.0 - impact
+      gainToDest = (gainToDest === undefined) ? gain : gainToDest * gain
+      seg.gainToDest = gainToDest
+    }
+  }
+}
+
+/**
+ * pruneRoutes removes any routes that are below the specified minimum gain to
+ * destination. This is done by examining the 1st segment of each route's gain to
+ * destination (which is cumulative for the entire route). Similarly, only the top
+ * maxRoutes routes are returned, which is accomplished by sorting on gain to destination
+ * and returning the first maxRoutes routes.
+ * 
+ * @param routes 
+ * @param options 
+ * @returns 
+ */
+export const pruneRoutes = (routes: t.VFRoutes, options?: any): t.VFRoutes =>
+{
+  const _options: any = { maxRoutes: 10, minGainToDest: 0.05, ...options }
+
+  const prunedRoutes: t.VFRoutes = routes.filter((route: t.VFRoute) => {
+    return (route.length > 0 &&
+            route[0].gainToDest &&
+            route[0].gainToDest > options.minGainToDest)
+  })
+
+  prunedRoutes.sort((routeA: t.VFRoute, routeB: t.VFRoute) => {
+    if (routeA.length && 
+        routeB.length &&
+        routeA[0].gainToDest &&
+        routeB[0].gainToDest) {
+      return routeB[0].gainToDest - routeA[0].gainToDest    // descending sort
+    }
+    return 0.0
+  })
+
+  return prunedRoutes.slice(0, _options.maxRoutes)
+}
+
+/**
+ * removeRoutesWithLowerOrderPairs:
+ *    This method is a placeholder (implemented earlier and working),
+ *    for analyzing routes that may have a pair in common and removing
+ *    the pair in the later stages to ensure an accurate estimate.
+ * 
+ * WARNING: This should be run after pruneRoutes!!!!!!!!
+ * 
+ * TODO: re-write this to use a tree traversal and consider the optimal placement of a 
+ *       duplicate pair (i.e. a late stage high slippage pair may be more intelligent
+ *       than using the same pair early stage--gain to dest reveals more guidance in this
+ *       decision)
+ * 
+ *  The route analysis object in the method below allows us to quickly filter out routes that offer no splitting benefits as well as
+ *  filtering out routes that have high impact pairs further downstream (a later hop) that would impact trade estimates.
+ * 
+ *  Route Analysis Object:
+ *  {
+ *    routes: {
+ *      <id>: {
+ *        route: <route obj>,
+ *        yieldPct: <percentage>,
+ *      }
+ *    },
+ *    pairs: {
+ *      <pairId>: {
+ *        <hop>: [
+ *          { id: <route id>,
+ *            impact: <percentage>
+ *          }
+ *          ...
+ *        ],
+ *        ...
+ *      }
+ *    }
+ *  }
+ * 
+ */
+export const removeRoutesWithLowerOrderPairs = (routes: t.VFRoutes,
+                                                options: any) => {
+  let _routeIdCounter = 0
+  const routeAnalysis: any = {
+    routes: {},
+    pairs: {}
+  }
+
+  for (const route of routes) {
+    const firstSeg: t.VFSegment = route[0]
+    const lastSeg: t.VFSegment = route[route.length - 1]
+    let yieldPct: number = (firstSeg.srcUSD && lastSeg.dstUSD) ? 
+      100.0 * (parseFloat(lastSeg.dstUSD) / parseFloat(firstSeg.srcUSD)) : 0.0
+    
+    const routeId = _routeIdCounter++
+    routeAnalysis.routes[routeId] = {
+      route,
+      yieldPct
+    }
+
+    let hopIdx = 0
+    for (const seg of route) {
+      hopIdx++
+      const { pairId, impact } = seg
+      if (!routeAnalysis.pairs.hasOwnProperty(pairId)) {
+        routeAnalysis.pairs[pairId] = {}
+      }
+      if (!routeAnalysis.pairs[pairId].hasOwnProperty(hopIdx)) {
+        routeAnalysis.pairs[pairId][hopIdx] = []
+      }
+      routeAnalysis.pairs[pairId][hopIdx].push({
+        id: routeId,
+        impact: impact ? parseFloat(impact) : 0.0   // TODO: 0 might be inappropriate
+      })
+    }
+  }
+  console.log(`Route analysis:\n` +
+              `================================================================================\n` +
+              `${JSON.stringify(routeAnalysis, null, 2)}`)
+  
+  /* Now remove routes that re-use pairs with slippage above a threshold, n, in later route hops.
+   * i.e. If route 1 uses pair X in the first hop and route 2 uses pair X in the second hop, exclude
+   *      route 2.
+   * TODO: this could easily be done with a crawl of the tree and populating a dictionary (realized this
+   *       after writing the working code below) for later pruning of routes.
+   */
+  const MAX_SLIPPAGE = 2.0    // Impact
+  const excludeRoutes: string[] = []
+  for (const pairId in routeAnalysis.pairs) {
+    const pairData = routeAnalysis.pairs[pairId]
+
+    // Exclude pairs that are never in more than one hop.
+    //
+    if (Object.keys(pairData).length <= 1) {
+      continue
+    }
+
+    let firstHop = true
+    let maxSlippage = 0.0
+    for (let hopIdx = 0; hopIdx <= options.max_hops.value; hopIdx++) {
+      const pairHopData = pairData[hopIdx]
+      if (!pairHopData) {
+        continue
+      }
+      // log.debug(`Examining pair:\n${JSON.stringify(pairHopData, null, 2)}`)
+
+      for (const pairSegmentData of pairHopData) {
+        if (pairSegmentData.impact > maxSlippage) {
+          maxSlippage = pairSegmentData.impact
+        }
+      }
+
+      // Don't remove the pair if it's in the first hop we've found using this pair in any of the routes:
+      //
+      if (firstHop) {
+        //    - TODO: special case, pairs in the same hop but with different impacts (implies that they are different
+        //            paths).
+        //
+        firstHop = false
+        continue
+      }
+
+      // Remove routes that feature a pair further down the route that is used earlier and exceeds our
+      // slippage threshold:
+      //
+      if (maxSlippage > MAX_SLIPPAGE) {
+        for (const pairSegmentData of pairHopData) {
+          excludeRoutes.push(pairSegmentData.id)
+        }
+      }
+    }
+  }
+  log.debug(`Removing ${excludeRoutes.length} routes due to high-slippage pairs re-used downstream.\n`)
+  const filteredRoutes: t.VFRoutes = []
+  for (const routeId in routeAnalysis.routes) {
+    if (excludeRoutes.includes(routeId)) {
+      continue
+    }
+    filteredRoutes.push(routeAnalysis.routes[routeId].route)
+  }
+
+  return filteredRoutes
+}
+
+export const convertRoutesToLegacyFmt = (allPairData: t.Pairs, tokenData: t.Tokens, routes: t.VFRoutes): any => {
+  const legacyRoutesFmt: any = []
+  for (const route of routes) {
+    let remainingImpactPercent = 1
+    const numSwaps = route.length
+    let routeStr = ''
+    let routeIdStr = ''
+    let srcData: any = {}
+    let dstData: any = {}
+    let amountIn: string | undefined = ''
+    let amountOut: string | undefined = ''
+    const orderedSwaps = []
+
+    for (let segIdx = 0; segIdx < route.length; segIdx++) {
+      const segment = route[segIdx]
+
+      const pairData = allPairData.getPair(segment.pairId)
+      const { token0, token1 } = pairData
+
+      const swap: any = {
+        src: segment.src,
+        dst: segment.dst,
+        id: segment.pairId,
+        impact: segment.impact,
+        amountIn: segment.srcAmount,
+        amountOut: segment.dstAmount,
+        amountInUSD: segment.srcUSD,
+        amountOutUSD: segment.dstUSD,
+        token0,
+        token1
+      }
+
+      orderedSwaps.push(swap)
+
+      if (segment.impact !== undefined) {
+        remainingImpactPercent = remainingImpactPercent * (1 - parseFloat(segment.impact)/100)
+      }
+
+      if (segIdx === 0) {
+        routeStr += `${tokenData.getSymbol(segment.src)} > ${tokenData.getSymbol(segment.dst)}`
+        routeIdStr += `${segment.src} > ${segment.dst}`
+      } else {
+        routeStr += ` > ${tokenData.getSymbol(segment.dst)}`
+        routeIdStr += ` > ${segment.dst}`
+      }
+
+      if (segIdx === 0) {
+        srcData = tokenData.getToken(segment.src)
+        amountIn = segment.srcAmount
+      }
+      if (segIdx === route.length - 1) {
+        dstData = tokenData.getToken(segment.dst)
+        amountOut = segment.dstAmount
+      }
+    }
+    
+    const legacyRoute: any = {
+      totalImpact: (1 - remainingImpactPercent) * 100,
+      numSwaps,
+      routeStr,
+      routeIdStr,
+      srcData,
+      dstData,
+      amountIn,
+      amountOut,
+      orderedSwaps
+    }
+
+    legacyRoutesFmt.push(legacyRoute)
+  }
+
+  return legacyRoutesFmt
+}
