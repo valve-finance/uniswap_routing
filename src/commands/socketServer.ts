@@ -363,14 +363,14 @@ const _routeDataToPages = (routeData: RouteData): any =>
   const spYield = routeData.getSinglePathValveYield()
   const spElements = routeData.getSinglePathElements()
   if (uniYield && spYield && spElements) {
-    const delta = (uniYield.usd > 0) ?
-      100 * (spYield.usd - uniYield.usd) / (uniYield.usd) : 0.0
+    const delta = (uniYield.token> 0) ?
+      100 * (spYield.token - uniYield.token) / (uniYield.token) : 0.0
     const deltaStr = `(difference: ${delta > 0 ? '+' : ''}${delta.toFixed(3)}% UNI)`
 
     pages.push({
       title: 'Individual Routes',
-      description: [{text: `Uniswap route output $${uniYield.usd} USD.`},
-                    {text: `Valve best route $${spYield.usd} USD ${deltaStr}.`, textStyle: 'bold'}],
+      description: [{text: `Uniswap route output $${uniYield.token} tokens.`},
+                    {text: `Valve best route $${spYield.token} tokens ${deltaStr}.`, textStyle: 'bold'}],
       elements: spElements,
       trade: {
         srcSymbol: routeData.getSourceSymbol(),
@@ -386,14 +386,14 @@ const _routeDataToPages = (routeData: RouteData): any =>
   const mpYield = routeData.getMultiPathValveYield()
   const mpElements = routeData.getMultiPathElements()
   if (uniYield && mpYield && mpElements) {
-    const delta = (uniYield.usd > 0) ?
-      100 * (mpYield.usd - uniYield.usd) / (uniYield.usd) : 0.0
+    const delta = (uniYield.token> 0) ?
+      100 * (mpYield.token - uniYield.token) / (uniYield.token) : 0.0
     const deltaStr = `(difference: ${delta > 0 ? '+' : ''}${delta.toFixed(3)}% UNI)`
 
     pages.push({
       title: `Multi-Path Route`,
-      description: [{text: `Valve multi route output $${mpYield.usd.toFixed(2)} USD ${deltaStr}`},
-                    {text: `Yield difference: ${delta > 0 ? '+' : ''}$${(mpYield.usd - uniYield.usd).toFixed(2)}`, textStyle: 'bold'}],
+      description: [{text: `Valve multi route output $${mpYield.token.toFixed(2)} tokens ${deltaStr}`},
+                    {text: `Yield difference: ${delta > 0 ? '+' : ''}$${(mpYield.token - uniYield.token).toFixed(2)}`, textStyle: 'bold'}],
       elements: mpElements,
       trade: {
         srcSymbol: routeData.getSourceSymbol(),
@@ -600,6 +600,11 @@ export const startSocketServer = async(port: string): Promise<void> => {
                           key: 'TSO_3',
                           text: 'Tokens in Pairs with $1M Liquidity',
                           value: 'Tokens in Pairs with $1M Liquidity',
+                        },
+                        {
+                          key: 'TSO_4',
+                          text: 'Tokens in pairs that do not include WETH',
+                          value: 'Tokens in pairs that do not include WETH',
                         }
                       ],
                       proportioningAlgorithmOptions: [
@@ -699,17 +704,34 @@ export const startSocketServer = async(port: string): Promise<void> => {
       //    TODO - for now we'll just use the 100M case, but we need to expand this properly
       //
       const _tokenSet: Set<string> = new Set<string>()
-      const _minPairLiquidity = 100000000
-      // TODO: pair data return an iterator to the pairs:
-      for (const pairId of _uniData.pairData.getPairIds()) {
-        const pair = _uniData.pairData.getPair(pairId)
-        const usd = parseFloat(pair.reserveUSD)
-        if (usd > _minPairLiquidity) {
-          _tokenSet.add(pair.token0.id.toLowerCase())
-          _tokenSet.add(pair.token1.id.toLowerCase())
+
+      if (tokenSet !== 'Tokens in Pairs with $1M Liquidity') {
+        const _minPairLiquidity = 100000000
+        // TODO: pair data return an iterator to the pairs:
+        for (const pairId of _uniData.pairData.getPairIds()) {
+          const pair = _uniData.pairData.getPair(pairId)
+          const usd = parseFloat(pair.reserveUSD)
+          if (usd > _minPairLiquidity) {
+            _tokenSet.add(pair.token0.id.toLowerCase())
+            _tokenSet.add(pair.token1.id.toLowerCase())
+          }
         }
+        log.debug(`Found ${_tokenSet.size} tokens in pairs with > $${_minPairLiquidity} USD liquidity.`)
+      } else {  /* non-weth pair set */
+        // Find all tokens that are in a pair with a token other than WETH:
+        //
+        for (const pairId of _uniData.pairData.getPairIds()) {
+          const pair = _uniData.pairData.getPair(pairId)
+          const usd = parseFloat(pair.reserveUSD)
+          // if (usd > _minPairLiquidity) {
+          if (!c.WETH_ADDRS_LC.includes(pair.token0.id.toLowerCase()) &&
+              !c.WETH_ADDRS_LC.includes(pair.token1.id.toLowerCase())) {
+            _tokenSet.add(pair.token0.id.toLowerCase())
+            _tokenSet.add(pair.token1.id.toLowerCase())
+          }
+        }
+        log.debug(`Found ${_tokenSet.size} tokens not in pairs with WETH.`)
       }
-      log.debug(`Found ${_tokenSet.size} tokens in pairs with > $${_minPairLiquidity} USD liquidity.`)
 
 
       // 2. For each token, construct a trade to each other token. Set the
@@ -815,20 +837,26 @@ export const startSocketServer = async(port: string): Promise<void> => {
       // Create Summary Content at top of report:
       //
       let totalTrades = tradeStats.length
+      let spNoUniRouteTrades = 0
       let spBetterTrades = 0
       let spSameTrades = 0
       let spWorseTrades = 0
       let spUnknownTrades = 0
+      let mpNoUniRouteTrades = 0
       let mpBetterTrades = 0
       let mpSameTrades = 0
       let mpWorseTrades = 0
       let mpUnknownTrades = 0
       // Might need to use thresholds here for equality problems with double types <-- TODO:
+      const ZERO_THRESHOLD = 0.0000000001
       for (const tradeStat of tradeStats) {
         if (tradeStat.uniYield) {
           if (tradeStat.spYield) {
-            if (tradeStat.spYield.token > tradeStat.uniYield.token) {
+            if (tradeStat.uniYield.token < ZERO_THRESHOLD) {
+              spNoUniRouteTrades++
+            } else if (tradeStat.spYield.token > tradeStat.uniYield.token) {
               spBetterTrades++
+              log.debug(`spBetterTrades: sp=${tradeStat.spYield.token}, uni=${tradeStat.uniYield.token}`)
             } else if (tradeStat.spYield.token < tradeStat.uniYield.token) {
               spWorseTrades++
             } else {  
@@ -839,7 +867,9 @@ export const startSocketServer = async(port: string): Promise<void> => {
           }
 
           if (tradeStat.mpYield) {
-            if (tradeStat.mpYield.token > tradeStat.uniYield.token) {
+            if (tradeStat.uniYield.token < ZERO_THRESHOLD) {
+              mpNoUniRouteTrades++
+            } else if (tradeStat.mpYield.token > tradeStat.uniYield.token) {
               mpBetterTrades++
             } else if (tradeStat.mpYield.token < tradeStat.uniYield.token) {
               mpWorseTrades++
@@ -863,12 +893,14 @@ export const startSocketServer = async(port: string): Promise<void> => {
       reportPage.content.push({row: `${spSameTrades} single path trades the same as UNI V2 routing.`, type: 'indent'})
       reportPage.content.push({row: `${spWorseTrades} single path trades worse than UNI V2 routing.`, type: 'indent'})
       reportPage.content.push({row: `${spUnknownTrades} single path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
+      reportPage.content.push({row: `${spNoUniRouteTrades} single path trades with no UNI V2 routing.`, type: 'indent'})
       reportPage.content.push({row: '', type: 'indent'})
       reportPage.content.push({row: 'Multi-path Trades:', type: 'bold'})
       reportPage.content.push({row: `${mpBetterTrades} multi-path trades improved over UNI V2 routing.`, type: 'indent'})
       reportPage.content.push({row: `${mpSameTrades} multi-path trades the same as UNI V2 routing.`, type: 'indent'})
       reportPage.content.push({row: `${mpWorseTrades} multi-path trades worse than UNI V2 routing.`, type: 'indent'})
       reportPage.content.push({row: `${mpUnknownTrades} multi-path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
+      reportPage.content.push({row: `${mpNoUniRouteTrades} multi-path trades with no UNI V2 routing.`, type: 'indent'})
 
 
       // Create Single Path Content:
