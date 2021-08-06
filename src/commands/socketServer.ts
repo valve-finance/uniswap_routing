@@ -632,7 +632,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
 
     socket.on('report-generate', async (reportParameters: any) => {
       // Training Wheels:
-      let maxTrades = 50
+      let maxTrades = 250 
 
 
       const requestId = _getRequestId()
