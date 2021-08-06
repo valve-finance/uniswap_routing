@@ -411,13 +411,18 @@ const _routeDataToPages = (routeData: RouteData): any =>
 
 const _getReportParametersHash = (reportParameters: any): string =>
 {
-  const properties = Object.keys(reportParameters)
-  properties.sort()
+  const orderedKeys: any = Object.keys(reportParameters).sort()
+  const orderedKeyValues = []
+  for (const key of orderedKeys) {
+    orderedKeyValues.push(`${key}::${reportParameters[key]}`)
+  }
   
   const hash = cr.createHash('md5')   // md5 should be sufficient here as the application is not security
                                       // and sha256's length can be problematic for win fs's.
-  hash.update(properties.join('-'))
-  return hash.digest('hex')
+  hash.update(orderedKeyValues.join('-'))
+  const hashStr = hash.digest('hex')
+
+  return hashStr
 }
 
 export const startSocketServer = async(port: string): Promise<void> => {
@@ -627,7 +632,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
 
     socket.on('report-generate', async (reportParameters: any) => {
       // Training Wheels:
-      let maxTrades = 5
+      let maxTrades = 50
 
 
       const requestId = _getRequestId()
@@ -661,10 +666,31 @@ export const startSocketServer = async(port: string): Promise<void> => {
       } else {
         // TODO: return the existing report
       }
+      
+      // If the report already exists then return it and skip the trade calculations below
+      //
+      const REPORT_FILE_NAME = 'report.json'
+      path.push(REPORT_FILE_NAME)
+      const reportFilePath = path.join('/')
+      if (fs.existsSync(reportFilePath)) {
+        try {
+          const reportPageStrBuf = fs.readFileSync(reportFilePath)
+          socket.emit(reqType, {
+            requestId,
+            pages: [ JSON.parse(reportPageStrBuf.toString()) ]
+          })
+          log.debug(`Returned existing report ${reportFilePath}. Skipping generation of new report.`)
+          return
+        } catch (error) {
+          log.warn(`Failed to find/read ${reportFilePath}. Generating new report.`)
+        }
+      }
+      path.pop()
 
       const PARAMS_FILE = 'params.json'
       path.push(PARAMS_FILE)
       const paramsFilePath = path.join('/')
+      // TODO: speed this up and rip out sync where sensible here and elsewhere
       fs.writeFileSync(paramsFilePath, JSON.stringify(reportParameters, null, 2))
       path.pop()
 
@@ -902,6 +928,11 @@ export const startSocketServer = async(port: string): Promise<void> => {
         requestId,
         pages
       })
+
+      // Store the report page
+      fs.writeFile(reportFilePath,
+                   JSON.stringify(reportPage),
+                   (err) => { err && log.warn(`Failed to write ${reportFilePath} because\n${err}`) })
     })
 
     socket.on('report-fetch-route', async (routeParameters: any) => {
