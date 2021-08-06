@@ -22,7 +22,9 @@ import { v4 as uuidv4 } from 'uuid'
 import cytoscape from 'cytoscape'
 import crawl from 'tree-crawl'
 import { RouteData, TradeYieldData } from '../routing/types'
-
+import * as fs from 'fs'
+import * as cr from 'crypto'
+import { report } from 'process'
 
 // TODO: back with Redis instead of mem
 const rateLimitMem = require('./../middleware/rateLimiterMem.js')
@@ -351,7 +353,6 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
   }
 
   return routeData
-
 }
 
 const _routeDataToPages = (routeData: RouteData): any => 
@@ -406,6 +407,17 @@ const _routeDataToPages = (routeData: RouteData): any =>
   }
 
   return pages
+}
+
+const _getReportParametersHash = (reportParameters: any): string =>
+{
+  const properties = Object.keys(reportParameters)
+  properties.sort()
+  
+  const hash = cr.createHash('md5')   // md5 should be sufficient here as the application is not security
+                                      // and sha256's length can be problematic for win fs's.
+  hash.update(properties.join('-'))
+  return hash.digest('hex')
 }
 
 export const startSocketServer = async(port: string): Promise<void> => {
@@ -615,7 +627,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
 
     socket.on('report-generate', async (reportParameters: any) => {
       // Training Wheels:
-      let maxTrades = 25
+      let maxTrades = 5
 
 
       const requestId = _getRequestId()
@@ -632,6 +644,30 @@ export const startSocketServer = async(port: string): Promise<void> => {
         maximumRoutesConsidered,
         removeLowerOrderDuplicatePairs,
         limitSwapsForWETH } = reportParameters
+      
+      // 0. Make sure an area to store the report output exists
+      //    TODO: singlton w/ control / queing for writes
+      const path = []
+      const REPORTS_DIR = 'reports'
+      path.push(REPORTS_DIR)
+      if (!fs.existsSync(path.join('/'))) {
+        fs.mkdirSync(path.join('/'))
+      }
+
+      const PARAMS_HASH = _getReportParametersHash(reportParameters)
+      path.push(PARAMS_HASH)
+      if (!fs.existsSync(path.join('/'))) {
+        fs.mkdirSync(path.join('/'))
+      } else {
+        // TODO: return the existing report
+      }
+
+      const PARAMS_FILE = 'params.json'
+      path.push(PARAMS_FILE)
+      const paramsFilePath = path.join('/')
+      fs.writeFileSync(paramsFilePath, JSON.stringify(reportParameters, null, 2))
+      path.pop()
+
     
       // 1. Get the set of tokens that we're trading:
       //    TODO - for now we'll just use the 100M case, but we need to expand this properly
@@ -671,7 +707,8 @@ export const startSocketServer = async(port: string): Promise<void> => {
         }
       }
 
-      const pages = []
+      const tradeStats: any = []
+      const pages: any = []
       let tradeCount = 0
       const tokenArr = [..._tokenSet]
       for (let srcIdx = 0; 
@@ -684,8 +721,8 @@ export const startSocketServer = async(port: string): Promise<void> => {
             continue
           }
 
+          const startMs = Date.now()
           tradeCount++
-          log.debug(`Processing trade ${tradeCount} of ${maxTrades}.`)
           const src = tokenArr[srcIdx]
           const dst = tokenArr[dstIdx]
           if (!_uniData.wethPairData) {
@@ -696,63 +733,205 @@ export const startSocketServer = async(port: string): Promise<void> => {
                                                       src,
                                                       tradeAmount)
 
-          log.debug(`Trade:\n` +
-                    `    source =  ${_uniData.tokenData.getSymbol(src.toLowerCase())}\n` +
-                    `    dest =    ${_uniData.tokenData.getSymbol(dst.toLowerCase())}\n` +
-                    `    amount =  ${amountSrc} (USD: $${tradeAmount})\n` +
-                    `    options = ${JSON.stringify(options, null, 2)}\n`)
+          const srcSymbol = _uniData.tokenData.getSymbol(src.toLowerCase())
+          const dstSymbol = _uniData.tokenData.getSymbol(dst.toLowerCase())
+          socket && socket.emit('status', {
+            status: `Processing trade ${tradeCount} of ${maxTrades} (${srcSymbol} --> ${dstSymbol}).`
+          })
 
-          const routeData = await _processMultiPathRouteReq(_uniData,
-                                                            _routeCache,
-                                                            src,
-                                                            dst,
-                                                            amountSrc,
-                                                            options)
+          log.debug(`Processing trade ${tradeCount} of ${maxTrades} (${srcSymbol} --> ${dstSymbol}, ` +
+                    `${amountSrc}tokens, $${tradeAmount}USD).`)
 
-          const tradePages = _routeDataToPages(routeData)
-          log.debug(`trade pages length = ${tradePages.length}`)
-          if (tradePages.length <= 0) {
-            tradeCount--
-            continue
-          }
+          const routeData: RouteData = await _processMultiPathRouteReq(_uniData,
+                                                                       _routeCache,
+                                                                       src,
+                                                                       dst,
+                                                                       amountSrc,
+                                                                       options)
 
-          for (const page of tradePages) {
-            pages.push(page)
-          }
+          const routeFileName = `${src}_${dst}.json`
+          path.push(routeFileName)
+          const filePath = path.join('/')
+          fs.writeFile(filePath,
+                       routeData.serialize(),
+                       (err) => { err && log.warn(`Failed to write ${filePath} because\n${err}`) })
+          path.pop()
+
+
+          log.debug(`Trade computed in ${Date.now() - startMs} ms.`)
+
+          tradeStats.push({
+            src,
+            dst,
+            srcSymbol: routeData.getSourceSymbol(),
+            dstSymbol: routeData.getDestSymbol(),
+            uniYield: routeData.getUniYield(),
+            spYield: routeData.getSinglePathValveYield(),
+            mpYield: routeData.getMultiPathValveYield()
+          })
         }
       }
 
-      let titlePage = {
+      const description: any[] = [ {text: 'Parameters', textStyle: 'bold'}]
+      for (const key in reportParameters) {
+        description.push({ text: `${key}:  ${reportParameters[key]}`, textStyle: 'indent'})
+      }
+
+      const reportPage: any = {
         title: 'Report Summary',
-        description: `TBD ...`,
-        content: [''],
-        elements: []
+        description,
+        content: [],
+        elements: [],
+        paramsHash: PARAMS_HASH
       }
-      titlePage.content.push('Single Route Data')
-      titlePage.content.push('========================================')
-      for (const page of pages)  {
-        if (page && page.trade && !page.trade.isMultiroute && page.trade.delta !== undefined) {
-          const { delta } = page.trade
-          const deltaStr = `${delta >= 0 ? '+' : ''}${delta.toFixed(3)}%`
-          titlePage.content.push(`${deltaStr}  ${page.trade.srcSymbol} -> ${page.trade.dstSymbol} ($${page.trade.valve.usd} USD)`)
+
+
+      // Create Summary Content at top of report:
+      //
+      let totalTrades = tradeStats.length
+      let spBetterTrades = 0
+      let spSameTrades = 0
+      let spWorseTrades = 0
+      let spUnknownTrades = 0
+      let mpBetterTrades = 0
+      let mpSameTrades = 0
+      let mpWorseTrades = 0
+      let mpUnknownTrades = 0
+      // Might need to use thresholds here for equality problems with double types <-- TODO:
+      for (const tradeStat of tradeStats) {
+        if (tradeStat.uniYield) {
+          if (tradeStat.spYield) {
+            if (tradeStat.spYield.token > tradeStat.uniYield.token) {
+              spBetterTrades++
+            } else if (tradeStat.spYield.token < tradeStat.uniYield.token) {
+              spWorseTrades++
+            } else {  
+              spSameTrades++
+            }
+          } else {
+            spUnknownTrades++
+          }
+
+          if (tradeStat.mpYield) {
+            if (tradeStat.mpYield.token > tradeStat.uniYield.token) {
+              mpBetterTrades++
+            } else if (tradeStat.mpYield.token < tradeStat.uniYield.token) {
+              mpWorseTrades++
+            } else { 
+              mpSameTrades++
+            }
+          } else {
+            mpUnknownTrades++
+          }
+        } else {
+          spUnknownTrades++
+          mpUnknownTrades++
         }
       }
-      titlePage.content.push('')
-      titlePage.content.push('Multi-Route Data')
-      titlePage.content.push('========================================')
-      for (const page of pages)  {
-        if (page && page.trade && page.trade.isMultiroute && page.trade.delta !== undefined) {
-          const { delta } = page.trade
-          const deltaStr = `${delta >= 0 ? '+' : ''}${delta.toFixed(3)}%`
-          titlePage.content.push(`${deltaStr}  ${page.trade.srcSymbol} -> ${page.trade.dstSymbol} ($${page.trade.valve.usd} USD)`)
+
+      reportPage.content.push({row: 'Trade Statistics', type: 'h3'})
+      reportPage.content.push({row: `${totalTrades} trades analyzed.`})
+      reportPage.content.push({row: ''})
+      reportPage.content.push({row: 'Single Path Trades:', type: 'bold'})
+      reportPage.content.push({row: `${spBetterTrades} single path trades improved over UNI V2 routing.`, type: 'indent'})
+      reportPage.content.push({row: `${spSameTrades} single path trades the same as UNI V2 routing.`, type: 'indent'})
+      reportPage.content.push({row: `${spWorseTrades} single path trades worse than UNI V2 routing.`, type: 'indent'})
+      reportPage.content.push({row: `${spUnknownTrades} single path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
+      reportPage.content.push({row: '', type: 'indent'})
+      reportPage.content.push({row: 'Multi-path Trades:', type: 'bold'})
+      reportPage.content.push({row: `${mpBetterTrades} multi-path trades improved over UNI V2 routing.`, type: 'indent'})
+      reportPage.content.push({row: `${mpSameTrades} multi-path trades the same as UNI V2 routing.`, type: 'indent'})
+      reportPage.content.push({row: `${mpWorseTrades} multi-path trades worse than UNI V2 routing.`, type: 'indent'})
+      reportPage.content.push({row: `${mpUnknownTrades} multi-path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
+
+
+      // Create Single Path Content:
+      //
+      tradeStats.sort((statA: any, statB: any) => {
+        let spDeltaA = 0.0
+        let spDeltaB = 0.0
+        if (statA.uniYield && statA.spYield && statA.uniYield.token > 0.0) {
+          spDeltaA = 100.0 * (statA.spYield.token - statA.uniYield.token) / statA.uniYield.token
         }
+        if (statB.uniYield && statB.spYield && statB.uniYield.token > 0.0) {
+          spDeltaB = 100.0 * (statB.spYield.token - statB.uniYield.token) / statB.uniYield.token
+        }
+        statA.spDelta = spDeltaA
+        statB.spDelta = spDeltaB
+        return spDeltaB - spDeltaA
+      })
+
+      reportPage.content.push({row: 'Single Path Route Data', type: 'h3'})
+      for (const tradeStat of tradeStats) {
+        const yieldStr = (tradeStat.spYield) ? 
+          `, (${tradeStat.spYield.token.toFixed(6)} tokens, ~$${tradeStat.spYield.usd.toFixed(2)} USD)` : `, (???)`
+        const row = `${tradeStat.spDelta.toFixed(6)}%, ` +
+                    `${tradeStat.srcSymbol} --> ${tradeStat.dstSymbol}` + yieldStr
+        reportPage.content.push({row, src: tradeStat.src, dst: tradeStat.dst})
       }
-      pages.unshift(titlePage)
+      
+
+      // Create Multi-Path Content:
+      //
+      tradeStats.sort((statA: any, statB: any) => {
+        let mpDeltaA = 0.0
+        let mpDeltaB = 0.0
+        if (statA.uniYield && statA.mpYield && statA.uniYield.token > 0.0) {
+          mpDeltaA = 100.0 * (statA.mpYield.token - statA.uniYield.token) / statA.uniYield.token
+        }
+        if (statB.uniYield && statB.mpYield && statB.uniYield.token > 0.0) {
+          mpDeltaB = 100.0 * (statB.mpYield.token - statB.uniYield.token) / statB.uniYield.token
+        }
+        statA.mpDelta = mpDeltaA
+        statB.mpDelta = mpDeltaB
+        return mpDeltaB - mpDeltaA
+      })
+
+      reportPage.content.push({row: 'Multi-Path Route Data', type: 'h3'})
+      for (const tradeStat of tradeStats) {
+        const yieldStr = (tradeStat.mpYield) ? 
+          `, (${tradeStat.mpYield.token.toFixed(6)} tokens, ~$${tradeStat.mpYield.usd.toFixed(2)} USD)` : `, (???)`
+        const row = `${tradeStat.mpDelta.toFixed(6)}%, ` +
+                    `${tradeStat.srcSymbol} --> ${tradeStat.dstSymbol}` + yieldStr
+        reportPage.content.push({row, src: tradeStat.src, dst: tradeStat.dst})
+      }
+
+      pages.unshift(reportPage)
 
       socket.emit(reqType, {
         requestId,
         pages
       })
+    })
+
+    socket.on('report-fetch-route', async (routeParameters: any) => {
+      const {paramsHash, src, dst} = routeParameters
+
+      if (!paramsHash || !src || !dst) {
+        socket.emit('report-fetch-route', { error: 'Invalid request--paramsHash, src and dst must be defined.' })
+      } else {
+        const REPORTS_DIR = 'reports'
+        const routeFileName = `${src}_${dst}.json`
+        const path = [REPORTS_DIR, 
+                      paramsHash,
+                      routeFileName]
+
+        log.debug(`report-fetch-route: reading route ${path.join('/')}...`)
+
+        fs.readFile(path.join('/'), (err, data) => {
+          if (err) {
+            socket.emit('report-fetch-route', { error: `Failed reading route information.\n${err}` })
+          } else {
+            const routeData = new RouteData()
+            routeData.initFromSerialization(data.toString())
+
+            const pages = _routeDataToPages(routeData)
+
+            log.debug(`report-fetch-route: route pages length ${pages.length}.`)
+            socket.emit('report-fetch-route', { paramsHash, src, dst, pages })
+          }
+        })
+      }
     })
 
     socket.on('disconnect', (reason: string) => {
