@@ -12,7 +12,7 @@ const log = ds.getLog('uniswapV2')
  * 
  * @param fetchAmt 
  * @param lastId 
- * @returns TODO
+ * @returns 
  * 
  * Notes:
  *   This method uses the ID technique described in the last example from:
@@ -39,6 +39,10 @@ const log = ds.getLog('uniswapV2')
  * 
  *   Occassionally the graph just fails on a query so there is also retry if the response is
  *   missing the data field.  The default is 5 for missingDataRetries.
+ * 
+ * TODO: modify this to update to a specific block number (or lock it in to
+ *       the block number of the first fetch to keep the block number
+ *       consistent across all fetches).
  */
 const getRawPairsV2 = async(fetchAmt: number, 
                             lastId: string, 
@@ -65,6 +69,11 @@ const getRawPairsV2 = async(fetchAmt: number,
         token0Price
         token1Price
         liquidityProviderCount
+      }
+      _meta {
+        block {
+          number
+        }
       }
     }`,
     variables: {}
@@ -100,15 +109,14 @@ const getRawPairsV2 = async(fetchAmt: number,
  * fetchAllPairs:
  *   Fetches all uniswap pairs from the Uniswap V2 Graph.
  * 
- * TODO:
- *    - TS types
- *    - Look at got pagination for this
- *    - Look at extracting an error for the unexpected condition termination
+ * TODO: Look at extracting an error for the unexpected condition termination
+ * TODO: See above TO DO for getRawPairsV2 for block number consistency.
  */
 export const fetchAllRawPairsV2 = async(): Promise<t.Pairs> =>
 {
   let lastId = ''
   let numPairsToGet = 1000
+  let lowestBlockNumber = -1
 
   const pairArr: any = []
 
@@ -120,7 +128,15 @@ export const fetchAllRawPairsV2 = async(): Promise<t.Pairs> =>
                       `fetching ${pairArr.length} pairs.`)
     }
 
-    const { pairs }: any = rawPairData
+    const { pairs, _meta }: any = rawPairData
+    if (_meta && _meta.block && _meta.block.number) {
+      const blockNumber = parseInt(_meta.block.number)
+      if (!isNaN(blockNumber) &&
+          (lowestBlockNumber === -1) ||
+          (lowestBlockNumber > blockNumber)) {
+        lowestBlockNumber = blockNumber
+      }
+    }
     if (pairs.length < numPairsToGet) {
       // End the loop if less than numPairsToGet received:
       numPairsToGet = 0
@@ -137,6 +153,8 @@ export const fetchAllRawPairsV2 = async(): Promise<t.Pairs> =>
   for (const pair of pairArr) {
     allPairs.addPair(pair)
   }
+  allPairs.setLowestBlockNumber(lowestBlockNumber)
+  allPairs.clearUpdatedSinceLowestBlockNumber()
 
   return allPairs 
 }

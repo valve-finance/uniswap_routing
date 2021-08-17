@@ -121,9 +121,6 @@ export const getEstimatedTokensFromUSD = (allPairData: t.Pairs,
  *        - the toExact method means we might be able to construct a
  *          trade (if another method exists) where we specify the last
  *          input.
- * 
- *    2. If 1 is not yet completed, a more resolute way of passing in
- *       an input value is desireable.
  */
 export const computeTradeEstimates = (pairData: t.Pair, 
                                       tokenData: t.Tokens,
@@ -260,8 +257,9 @@ export const quoteRoutes = async (allPairData: t.Pairs,
    *  - examine this for higher performance opportunity
    * 
    * For now, aggregate the pairIds in the route and fetch their current stats
-   * in aggregate.  TODO: add the block id to the lookup and put it in the 
-   *                      updatedBlock.
+   * in aggregate.  
+   * 
+   * TODO: add the block id to the lookup and put it in the updatedBlock.
    * 
    */
   if (updatePairData) {

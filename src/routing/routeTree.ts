@@ -165,8 +165,6 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
         } else {
           // Special case - we've already added a root node, but need to ensure it's
           // tagged as the uniswap route if the current route is the uniswap one.
-          //   - this might make more sense using a find path op after the fact using
-          //     the uni route. (TODO:)
           //
           if (seg.isUni) {
             node.value.isUniRoute = true
@@ -200,8 +198,7 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
         node.children.push(dstNode)
       } else {
         // Special case - we've already added this node, but need to ensure it's tagged as
-        // the uniswap route. Might make more sense to do this in a post build find operation
-        // using the UNI route (TODO:)
+        // the uniswap route.
         //
         if (seg.isUni) {
           dstNode.value.isUniRoute = true

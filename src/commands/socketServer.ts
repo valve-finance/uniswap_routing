@@ -1,15 +1,20 @@
+import * as c from './../utils/constants'
 import * as ds from './../utils/debugScopes'
 import * as t from './../utils/types'
+import { REPORTS_DIR, 
+         PARAMS_FILE,
+         REPORT_FILE_NAME,
+         getReportParametersHash,
+         loadReportSummaries,
+         reportSummariesToOptions } from '../utils/report'
+import { getUniRouteV2 } from '../utils/uniswapSDK'
+import { deepCopy } from '../utils/misc'
+import { initUniData } from '../utils/data'
 import { sanitizeProperty, sanitizePropertyType } from '../utils/misc'
 import * as rg from '../routing/routeGraph'
 import * as rt from '../routing/routeTree'
-import * as rv from '../routing/routeVisualization'
-import * as c from './../utils/constants'
 import { getEstimatedTokensFromUSD } from '../routing/quoting'
-import { initUniData } from '../utils/data'
 import { RouteCache } from '../routing/routeCache'
-import { getUniRouteV2 } from '../utils/uniswapSDK'
-import { deepCopy } from '../utils/misc'
 import { quoteRoutes } from '../routing/quoting'
 
 import express from 'express'
@@ -19,17 +24,17 @@ import helmet from 'helmet'
 import requestIp from 'request-ip'
 import socketio from 'socket.io'
 import { v4 as uuidv4 } from 'uuid'
-import cytoscape from 'cytoscape'
 import crawl from 'tree-crawl'
-import { RouteData, TradeYieldData } from '../routing/types'
+import { RouteData, RouteStats, TradeStats, TradeYieldData } from '../routing/types'
 import * as fs from 'fs'
-import * as cr from 'crypto'
-import { report } from 'process'
+import { logger } from 'ethereum-abi-types-generator/node_modules/ethersv5'
 
 // TODO: back with Redis instead of mem
 const rateLimitMem = require('./../middleware/rateLimiterMem.js')
 
+
 const log = ds.getLog('socketServer')
+const USDC_CONVERT_ERR = 'Cannot convert USDC to source tokens.'
 
 
 // Placeholder until we get bull / redis in
@@ -131,6 +136,8 @@ const _processRouteReq = async(uniData: t.UniData,
                                amount: string,
                                options: any): Promise<any> =>
 {
+  const _routeStats = new RouteStats()
+
   const _routesP: Promise<t.VFRoutes> = routeCache.getRoutes(source, dest, { maxHops: options.max_hops.value })
                                                    .catch(error => {
                                                      // TODO: signal an error in routing to the client
@@ -138,12 +145,19 @@ const _processRouteReq = async(uniData: t.UniData,
                                                    })
 
   const _uniRouteP: Promise<any> = getUniRouteV2(source, dest, amount)
-                                   .catch(error => { return {} })
+                                   .catch(error => { return { error } })
   
   const _results = await Promise.all([_routesP, _uniRouteP])
   const _routes: t.VFRoutes = deepCopy(_results[0])    // <-- TODO: cleanup route 
                                                        //           cache to dc routes by default.
-  const _uniRoute: any = _results[1]
+  const _uniRouteResult: any = _results[1]
+  const _uniRoute = _uniRouteResult.routeObj
+
+  _routeStats.routesFound = (_routes && _routes.length) ? _routes.length : 0
+  _routeStats.uniRouteFound = (_uniRoute && _uniRoute.routePath && _uniRoute.routePath.length > 0)
+  if (!_routeStats.uniRouteFound) {
+    _routeStats.uniError = _uniRouteResult.error ? _uniRouteResult.error : 'Unknown error.'
+  }
 
   /**
    *    Tag the official UNI route and insert it if it's not in the cache result, so that
@@ -167,9 +181,10 @@ const _processRouteReq = async(uniData: t.UniData,
         foundUniRoute = true
         _route.forEach((_seg: t.VFSegment) => _seg.isUni = true)
 
-        // TODO TODO: To check our work w/ quotes, compare the value of
-        //            _uniRoute.expectedConvertQuote to the amount in the 
-        //            last seg if data updates are turned on
+        // NOTE: _uniRoute.expectedConvertQuote is the amount in tokens
+        //       estimated by UNI on chain. Might be interesting to compare
+        //       if update data is enabled (otherwise it would just mismatch).
+
         break
       }
     }
@@ -180,7 +195,7 @@ const _processRouteReq = async(uniData: t.UniData,
         const newRoute: t.VFRoute = []
         for (let idx = 0; idx < _uniRoute.routePath.length-1; idx++) {
           const src = _uniRoute.routePath[idx].toLowerCase()
-          const dst = _uniRoute.routePath[idx].toLowerCase()
+          const dst = _uniRoute.routePath[idx+1].toLowerCase()
 
           const edgeData: any = uniData.pairGraph.edge(src, dst)
           let pairId = ''
@@ -226,6 +241,8 @@ const _processRouteReq = async(uniData: t.UniData,
     const bDstAmount = bLastDstAmount ? parseFloat(bLastDstAmount) : 0.0
     return bDstAmount - aDstAmount
   })
+  _routeStats.routesMeetingCriteria = _quotedRoutes.length
+
   const _requestedQuotedRoutes: t.VFRoutes = _quotedRoutes.slice(0, options.max_results.value)
   if (uniData.wethPairData) {
     await rg.annotateRoutesWithUSD(uniData.pairData,
@@ -234,7 +251,7 @@ const _processRouteReq = async(uniData: t.UniData,
                                   options.update_data.value)
   }
 
-  return { routes: _requestedQuotedRoutes, uniRoute: _uniRoute.routeText }
+  return { routes: _requestedQuotedRoutes, uniRoute: _uniRoute.routeText, routeStats: _routeStats}
 }
 
 const _processMultiPathRouteReq = async(_uniData: t.UniData,
@@ -246,12 +263,12 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
 {
   // 1. Get the single path routes:
   //
-  const { routes } = await _processRouteReq(_uniData,
-                                            _routeCache,
-                                            source,
-                                            dest,
-                                            amount,
-                                            _options)
+  const { routes, routeStats } = await _processRouteReq(_uniData,
+                                                        _routeCache,
+                                                        source,
+                                                        dest,
+                                                        amount,
+                                                        _options)
   rg.annotateRoutesWithGainToDest(routes)
   rg.annotateRoutesWithSymbols(_uniData.tokenData, routes)
   const routesTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(routes)
@@ -277,9 +294,14 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
   // 2. Perform filtering and pruning of the single path routes
   //
   const prunedRoutes = rg.pruneRoutes(routes, {maxRoutes: 10, minGainToDest: 0.05})
-  // TODO: look at re-enabling this:
-  // const filteredRoutes = rg.removeRoutesWithLowerOrderPairs(prunedRoutes, _options)
-  const filteredRoutes = prunedRoutes
+  routeStats.mpRoutesMeetingCriteria = prunedRoutes.length
+
+  // TODO: removeRoutesWithLowerOrderPairs algorithm needs attention, it's done hastily and
+  //       is sub-optimal (i.e. might remove the best route if the shared pair occurs later
+  //       in the tree order/level):
+  const filteredRoutes = rg.removeRoutesWithLowerOrderPairs(prunedRoutes, _options)
+  routeStats.mpRoutesAfterRmDupLowerOrderPair = filteredRoutes.length
+
   const filteredRoutesTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(filteredRoutes)
   let valveOnePathYield: TradeYieldData = {
     usd: 0.0,
@@ -315,7 +337,7 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
     }
 
     // Calculate the net result of the multi-route trade by summing
-    // all the leave nodes:
+    // all the leaf nodes:
     //
     crawl(costedMultirouteTree,
           (node, context) => {
@@ -341,6 +363,7 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
                                   srcSymbol,
                                   dest,
                                   dstSymbol)
+  routeData.setInputAmount(parseFloat(amount))
   if (routesTree) {
     routeData.setSinglePathElementsFromTree(routesTree)
     routeData.setUniYield(uniYield)
@@ -352,6 +375,7 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
     routeData.setMultiPathValveYield(valveMultiPathYield)
   }
 
+  routeData.setRouteStats(routeStats)
   return routeData
 }
 
@@ -359,18 +383,66 @@ const _routeDataToPages = (routeData: RouteData): any =>
 {
   let pages: any = []
   const uniYield = routeData.getUniYield()
+  const routeStr = `${routeData.getSourceSymbol()} (${routeData.getSourceAddr()}) --> `+
+                                      `${routeData.getDestSymbol()} (${routeData.getDestAddr()})`
 
   const spYield = routeData.getSinglePathValveYield()
   const spElements = routeData.getSinglePathElements()
   if (uniYield && spYield && spElements) {
-    const delta = (uniYield.token> 0) ?
-      100 * (spYield.token - uniYield.token) / (uniYield.token) : 0.0
-    const deltaStr = `(difference: ${delta > 0 ? '+' : ''}${delta.toFixed(3)}% UNI)`
+    /*
+     * Create this report row array:
+     *
+     *     Route comparison:
+     *       Uniswap V2 Yield:  X tokens ($Y USD)
+     *       Valve Yield:  Z tokens ($W USD)
+     *       V% ([Q tokens, P USD]) [more than, less than, same as] Uniswap V2
+     * 
+     */
+    const description: any = [ {text: routeStr}, {text: ''} ]
+
+    let uniYieldStr = `${uniYield.token} tokens`
+    if (uniYield.usd && !isNaN(uniYield.usd)) {
+      uniYieldStr += ` ($${uniYield.usd.toFixed(2)} USD)`
+    }
+    description.push({text: `Uniswap V2 route yields ${uniYieldStr}.`})
+
+    let spYieldStr = `${spYield.token} tokens`
+    if (spYield.usd && !isNaN(spYield.usd)) {
+      spYieldStr += ` ($${spYield.usd.toFixed(2)} USD)`
+    }
+    description.push({text: `Valve Finance route yields ${spYieldStr}.`})
+    
+    let comparisonStr = ''
+    const delta = routeData.getPercentDifferenceSinglePath()
+    const difference = routeData.getDifferenceSinglePath()
+    const differenceUSD = routeData.getDifferenceSinglePath(true)
+    if (!isNaN(delta)) {
+      comparisonStr = `${delta.toFixed(6)}%`
+
+      if (!isNaN(differenceUSD)) {
+        comparisonStr += ` ($${differenceUSD.toFixed(2)} USD)`
+      } else if (!isNaN(difference)) {
+        comparisonStr += ` (${difference.toFixed(6)} tokens)`
+      }
+      if (delta > 0) {
+        comparisonStr += ', more than Uniswap V2.'
+      } else if (delta < 0) {
+        comparisonStr += ', less than Uniswap V2.'
+      } else {
+        comparisonStr += ', same as Uniswap V2.'
+      }
+    }
+    description.push({text: comparisonStr, textStyle: 'bold'})
+
+    const { routesFound, routesMeetingCriteria } = routeData.getRouteStats()
+    let routeStatsStr: string = ''
+    routeStatsStr += (routesFound !== undefined) ? `${routesFound} routes found.` : ''
+    routeStatsStr += (routesMeetingCriteria !== undefined) ?` ${routesMeetingCriteria} match criteria supplied.` : ''
+    description.push({text: routeStatsStr})
 
     pages.push({
-      title: 'Individual Routes',
-      description: [{text: `Uniswap route output $${uniYield.token} tokens.`},
-                    {text: `Valve best route $${spYield.token} tokens ${deltaStr}.`, textStyle: 'bold'}],
+      title: 'Single Path Routes',
+      description,
       elements: spElements,
       trade: {
         srcSymbol: routeData.getSourceSymbol(),
@@ -386,14 +458,61 @@ const _routeDataToPages = (routeData: RouteData): any =>
   const mpYield = routeData.getMultiPathValveYield()
   const mpElements = routeData.getMultiPathElements()
   if (uniYield && mpYield && mpElements) {
-    const delta = (uniYield.token> 0) ?
-      100 * (mpYield.token - uniYield.token) / (uniYield.token) : 0.0
-    const deltaStr = `(difference: ${delta > 0 ? '+' : ''}${delta.toFixed(3)}% UNI)`
+    /*
+     * Create this report row array:
+     *
+     *     Multi-Path Route Comparison:
+     *       Uniswap V2 Yield:  X tokens ($Y USD)
+     *       Valve Yield:  Z tokens ($W USD)
+     *       V% ([Q tokens, P USD]) [more than, less than, same as] Uniswap V2
+     * 
+     */
+    const description: any = [ {text: routeStr}, {text: ''} ]
+
+    let uniYieldStr = `${uniYield.token} tokens`
+    if (uniYield.usd && !isNaN(uniYield.usd)) {
+      uniYieldStr += ` ($${uniYield.usd.toFixed(2)} USD)`
+    }
+    description.push({text: `Uniswap V2 route yields ${uniYieldStr}.`})
+
+    let mpYieldStr = `${mpYield.token} tokens`
+    if (mpYield.usd && !isNaN(mpYield.usd)) {
+      mpYieldStr += ` ($${mpYield.usd.toFixed(2)} USD)`
+    }
+    description.push({text: `Valve Finance route yields ${mpYieldStr}.`})
+    
+    let comparisonStr = ''
+    const delta = routeData.getPercentDifferenceMultiPath()
+    const difference = routeData.getDifferenceMultiPath()
+    const differenceUSD = routeData.getDifferenceMultiPath(true)
+    if (!isNaN(delta)) {
+      comparisonStr = `${delta.toFixed(6)}%`
+
+      if (!isNaN(differenceUSD)) {
+        comparisonStr += ` ($${differenceUSD.toFixed(2)} USD)`
+      } else if (!isNaN(difference)) {
+        comparisonStr += ` (${difference.toFixed(6)} tokens)`
+      }
+      if (delta > 0) {
+        comparisonStr += ', more than Uniswap V2.'
+      } else if (delta < 0) {
+        comparisonStr += ', less than Uniswap V2.'
+      } else {
+        comparisonStr += ', same as Uniswap V2.'
+      }
+    }
+    description.push({text: comparisonStr, textStyle: 'bold'})
+    
+    const { routesFound, mpRoutesMeetingCriteria, mpRoutesAfterRmDupLowerOrderPair } = routeData.getRouteStats()
+    let routeStatsStr: string = ''
+    routeStatsStr += (routesFound !== undefined) ? `${routesFound} routes found.` : ''
+    routeStatsStr += (mpRoutesMeetingCriteria !== undefined) ? ` ${mpRoutesMeetingCriteria} match criteria supplied.` : ''
+    routeStatsStr += (mpRoutesAfterRmDupLowerOrderPair !== undefined) ? ` ${mpRoutesAfterRmDupLowerOrderPair} after removing dup. lower order pairs.` : ''
+    description.push({text: routeStatsStr})
 
     pages.push({
       title: `Multi-Path Route`,
-      description: [{text: `Valve multi route output $${mpYield.token.toFixed(2)} tokens ${deltaStr}`},
-                    {text: `Yield difference: ${delta > 0 ? '+' : ''}$${(mpYield.token - uniYield.token).toFixed(2)}`, textStyle: 'bold'}],
+      description,
       elements: mpElements,
       trade: {
         srcSymbol: routeData.getSourceSymbol(),
@@ -409,20 +528,400 @@ const _routeDataToPages = (routeData: RouteData): any =>
   return pages
 }
 
-const _getReportParametersHash = (reportParameters: any): string =>
+const _createReport = (reportParameters: any,
+                       paramsHash: string,
+                       tradeStats: TradeStats[]): any => 
 {
-  const orderedKeys: any = Object.keys(reportParameters).sort()
-  const orderedKeyValues = []
-  for (const key of orderedKeys) {
-    orderedKeyValues.push(`${key}::${reportParameters[key]}`)
+  const reportPage: any = {
+    title: 'Report Summary',
+    description: [ {text: reportParameters.analysisDescription},
+                   {text: `${tradeStats.length} trades between tokens analyzed.`} ],
+    content: [],
+    elements: [],
+    paramsHash
   }
-  
-  const hash = cr.createHash('md5')   // md5 should be sufficient here as the application is not security
-                                      // and sha256's length can be problematic for win fs's.
-  hash.update(orderedKeyValues.join('-'))
-  const hashStr = hash.digest('hex')
+  const { content } = reportPage
+ 
 
-  return hashStr
+  // Parameters Section:
+  //
+  content.push({row: 'Report Parameters', type: 'section'})
+  for (const key in reportParameters) {
+    content.push({row: `${key}: ${reportParameters[key]}`, textStyle: 'indent'})
+  }
+
+
+  const ZERO_THRESHOLD = 0.0000000000000000001   // 1^-18
+
+  // Single Path Route Results Section:
+  //
+  //////////////////////////////////////////////////////////////////////////////
+  content.push({row: 'Single Path Route Results', type: 'section'})
+
+  // Sort in desc. order of single-path delta to get ordered section rows
+  tradeStats.sort((statA: TradeStats, statB: TradeStats) => {
+    const spDeltaA = statA.spDelta ? statA.spDelta : 0
+    const spDeltaB = statB.spDelta ? statB.spDelta : 0
+    return spDeltaB - spDeltaA
+  })
+
+  // Stats for single-path for section are gathered first so section titles can include counts:
+  const spBetter: any = []
+  const spWorse: any = []
+  const spSame: any = []
+  const spIncomparable: any = []
+  const uniFail: any = []
+  const spFail: any = []
+  const spCriteriaFail: any = []
+  const spUsdcConvFail: any = []
+
+  for (const tradeStat of tradeStats) {
+    const { src, dst, srcSymbol, dstSymbol, routeStats } = tradeStat
+    let row = `${srcSymbol} --> ${dstSymbol}`
+
+    if (!routeStats.uniRouteFound && routeStats.vfiError !== USDC_CONVERT_ERR) {
+      // Build list of routes that UNI failed to get a route for:
+      const uniRow = row + `, (${routeStats.uniError})`
+      uniFail.push({row: uniRow, src, dst, view: false})
+    }
+
+    if (routeStats.vfiError === USDC_CONVERT_ERR) {
+      row += `, (${routeStats.vfiError}.)`
+      spUsdcConvFail.push({row, src, dst, view: false})
+    } else if (routeStats.routesFound === 0) {
+      // Build list of routes that Valve FI failed to get a route for:
+      row += ', (No route found or unable to convert USD amount to tokens for trade.)'
+      spFail.push({row, src, dst, view: false})
+    } else if (routeStats.routesMeetingCriteria === 0) {
+      // Build list of routes that did not meet user specified criteria:
+      row += ', (No routes met specified criteria.)'
+      spCriteriaFail.push({row, src, dst, view: false})
+    } else {
+      // Build lists of routes that were better, the same, incomparable or worse than UNI
+      if (tradeStat.spDelta !== undefined) {
+        const numTokensInStr = (isNaN(tradeStat.inputAmount)) ? '' : tradeStat.inputAmount.toFixed(6)
+        const numTokensOutStr = (tradeStat.spYield && tradeStat.spYield.token) ?
+          tradeStat.spYield.token.toFixed(6) : ''
+        row += (numTokensInStr && numTokensOutStr) ?
+            `, (${numTokensInStr} --> ${numTokensOutStr})` : ''
+
+        const { spDelta } = tradeStat
+        if (isNaN(spDelta)) {
+          /* special case, uni result is 0, would give delta of infinity,
+            likely due to no UNI route. */
+          spIncomparable.push({row, src, dst, view: true})
+        } else if (Math.abs(spDelta) < ZERO_THRESHOLD) {
+          /* same - can't compare equality on doubles, so threshold */
+          spSame.push({row, src, dst, view: true})
+        } else if (tradeStat.spDelta > 0) {
+          row = `+${tradeStat.spDelta.toFixed(6)}% better, ` + row
+          spBetter.push({row, src, dst, view: true})
+        } else if (tradeStat.spDelta < 0) {
+          row = `${tradeStat.spDelta.toFixed(6)}% worse, ` + row
+          spWorse.push({row, src, dst, view: true})
+        } else  {
+          log.error(`Failed to categorize trade for report, continuing:`, tradeStat)
+        }
+      }
+    }
+  }
+
+  content.push({row: `${spBetter.length} Better Performing Single Path Routes`, type: 'sub-section'})
+  spBetter.forEach((row: any) => { content.push(row)})
+
+  content.push({row: `${spWorse.length} Lower Performing Single Path Routes`, type: 'sub-section'})
+  spWorse.forEach((row: any) => { content.push(row)})
+  
+  content.push({row: `${spSame.length} Same Performing Single Path Routes`, type: 'sub-section'})
+  spSame.forEach((row: any) => { content.push(row)})
+  
+  content.push({row: `${spIncomparable.length} Incomparable Performance Single Path Routes`, type: 'sub-section'})
+  spIncomparable.forEach((row: any) => { content.push(row)})
+
+  
+  // Multi Path Route Results Section:
+  //
+  //////////////////////////////////////////////////////////////////////////////
+  content.push({row: 'Multi-Path Route Results', type: 'section'})
+
+  // Sort in desc. order of multi-path delta to get ordered section rows
+  tradeStats.sort((statA: TradeStats, statB: TradeStats) => {
+    const mpDeltaA = statA.mpDelta ? statA.mpDelta : 0
+    const mpDeltaB = statB.mpDelta ? statB.mpDelta : 0
+    return mpDeltaB - mpDeltaA
+  })
+
+  // Stats for multi-path for section are gathered first so section titles can include counts:
+  const mpBetter: any = []
+  const mpWorse: any = []
+  const mpSame: any = []
+  const mpIncomparable: any = []
+  const mpCriteriaFail: any = []
+
+  for (const tradeStat of tradeStats) {
+    const { src, dst, srcSymbol, dstSymbol, routeStats } = tradeStat
+    let row = `${srcSymbol} --> ${dstSymbol}`
+
+    if (routeStats.vfiError === USDC_CONVERT_ERR ||
+        routeStats.routesFound === 0 ||
+        routeStats.routesMeetingCriteria === 0) {
+      // Do nothing (reported these in single path section)
+    } else if (routeStats.mpRoutesMeetingCriteria === 0) {
+      // Build list of routes that did not meet user specified criteria:
+      row += ', (No routes met specified multi-path criteria.)'
+      mpCriteriaFail.push({row, src, dst, view: false})
+    } else {
+      // Build lists of routes that were better, the same, incomparable or worse than UNI
+      if (tradeStat.mpDelta !== undefined) {
+        const numTokensInStr = (isNaN(tradeStat.inputAmount)) ? '' : tradeStat.inputAmount.toFixed(6)
+        const numTokensOutStr = (tradeStat.mpYield && tradeStat.mpYield.token) ?
+          tradeStat.mpYield.token.toFixed(6) : ''
+        if (numTokensInStr && numTokensOutStr) {
+          row = `${numTokensInStr} ${srcSymbol} --> ${numTokensOutStr} ${dstSymbol}`
+        }
+
+        const { mpDelta } = tradeStat
+        if (isNaN(mpDelta)) {
+          /* mpecial case, uni result is 0, would give delta of infinity,
+            likely due to no UNI route. */
+          mpIncomparable.push({row, src, dst, view: true})
+        } else if (Math.abs(mpDelta) < ZERO_THRESHOLD) {
+          /* same - can't compare equality on doubles, so threshold */
+          mpSame.push({row, src, dst, view: true})
+        } else if (tradeStat.mpDelta > 0) {
+          row = `+${tradeStat.mpDelta.toFixed(6)}% better, ` + row
+          mpBetter.push({row, src, dst, view: true})
+        } else if (tradeStat.mpDelta < 0) {
+          row = `${tradeStat.mpDelta.toFixed(6)}% worse, ` + row
+          mpWorse.push({row, src, dst, view: true})
+        } else  {
+          log.error(`Failed to categorize trade for report, continuing:`, tradeStat)
+        }
+      }
+    }
+  }
+
+  content.push({row: `${mpBetter.length} Better Performing Multi-Path Routes`, type: 'sub-section'})
+  mpBetter.forEach((row: any) => { content.push(row)})
+
+  content.push({row: `${mpWorse.length} Lower Performing Multi-Path Routes`, type: 'sub-section'})
+  mpWorse.forEach((row: any) => { content.push(row)})
+  
+  content.push({row: `${mpSame.length} Same Performing Multi-Path Routes`, type: 'sub-section'})
+  mpSame.forEach((row: any) => { content.push(row)})
+  
+  content.push({row: `${mpIncomparable.length} Incomparable Performance Multi-Path Routes`, type: 'sub-section'})
+  mpIncomparable.forEach((row: any) => { content.push(row)})
+  
+  // Exceptions Section:
+  //
+  //////////////////////////////////////////////////////////////////////////////
+  content.push({row: 'Exceptions Preventing Analysis', type: 'section'})
+
+  content.push({row: `${uniFail.length} Routes Uniswap V2 Could Not Find`, type: 'sub-section'})
+  uniFail.forEach((row: any) => { content.push(row)})
+
+  content.push({row: `${spFail.length} Routes Valve Finance Could Not Find`, type: 'sub-section'})
+  spFail.forEach((row: any) => { content.push(row)})
+  
+  content.push({row: `${spCriteriaFail.length} Routes That Did Not Fit The Specified Criteria`, type: 'sub-section'})
+  spCriteriaFail.forEach((row: any) => { content.push(row)})
+  
+  content.push({row: `${mpCriteriaFail.length} Routes That Did Not Fit The Specified Multi-Path Criteria`, type: 'sub-section'})
+  mpCriteriaFail.forEach((row: any) => { content.push(row)})
+  
+  content.push({row: `${spUsdcConvFail.length} Routes That Could Not Be Evaluated From An Initial Amount In $USD`, type: 'sub-section'})
+  spUsdcConvFail.forEach((row: any) => { content.push(row)})
+
+
+
+  // // Create Summary Content at top of report:
+  // //
+  // let spNoUniRouteTrades = 0
+  // let spBetterTrades = 0
+  // let spSameTrades = 0
+  // let spWorseTrades = 0
+  // let spUnknownTrades = 0
+  // let mpNoUniRouteTrades = 0
+  // let mpBetterTrades = 0
+  // let mpSameTrades = 0
+  // let mpWorseTrades = 0
+  // let mpUnknownTrades = 0
+  // for (const tradeStat of tradeStats) {
+  //   if (tradeStat.uniYield) {
+  //     if (tradeStat.spYield) {
+  //       if (tradeStat.uniYield.token < ZERO_THRESHOLD) {
+  //         spNoUniRouteTrades++
+  //       } else if (tradeStat.spYield.token > tradeStat.uniYield.token) {
+  //         spBetterTrades++
+  //         log.debug(`spBetterTrades: sp=${tradeStat.spYield.token}, uni=${tradeStat.uniYield.token}`)
+  //       } else if (tradeStat.spYield.token < tradeStat.uniYield.token) {
+  //         spWorseTrades++
+  //       } else {  
+  //         spSameTrades++
+  //       }
+  //     } else {
+  //       spUnknownTrades++
+  //     }
+
+  //     if (tradeStat.mpYield) {
+  //       if (tradeStat.uniYield.token < ZERO_THRESHOLD) {
+  //         mpNoUniRouteTrades++
+  //       } else if (tradeStat.mpYield.token > tradeStat.uniYield.token) {
+  //         mpBetterTrades++
+  //       } else if (tradeStat.mpYield.token < tradeStat.uniYield.token) {
+  //         mpWorseTrades++
+  //       } else { 
+  //         mpSameTrades++
+  //       }
+  //     } else {
+  //       mpUnknownTrades++
+  //     }
+  //   } else {
+  //     spUnknownTrades++
+  //     mpUnknownTrades++
+  //   }
+  // }
+
+  // reportPage.content.push({row: 'Trade Statistics', type: 'section'})
+  // reportPage.content.push({row: ''})
+  // reportPage.content.push({row: 'Single Path Trades:', type: 'bold'})
+  // reportPage.content.push({row: `${spBetterTrades} single path trades improved over UNI V2 routing.`, type: 'indent'})
+  // reportPage.content.push({row: `${spSameTrades} single path trades the same as UNI V2 routing.`, type: 'indent'})
+  // reportPage.content.push({row: `${spWorseTrades} single path trades worse than UNI V2 routing.`, type: 'indent'})
+  // reportPage.content.push({row: `${spUnknownTrades} single path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
+  // reportPage.content.push({row: `${spNoUniRouteTrades} single path trades with no UNI V2 routing.`, type: 'indent'})
+  // reportPage.content.push({row: '', type: 'indent'})
+  // reportPage.content.push({row: 'Multi-path Trades:', type: 'bold'})
+  // reportPage.content.push({row: `${mpBetterTrades} multi-path trades improved over UNI V2 routing.`, type: 'indent'})
+  // reportPage.content.push({row: `${mpSameTrades} multi-path trades the same as UNI V2 routing.`, type: 'indent'})
+  // reportPage.content.push({row: `${mpWorseTrades} multi-path trades worse than UNI V2 routing.`, type: 'indent'})
+  // reportPage.content.push({row: `${mpUnknownTrades} multi-path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
+  // reportPage.content.push({row: `${mpNoUniRouteTrades} multi-path trades with no UNI V2 routing.`, type: 'indent'})
+
+
+  // // Create Single Path Content:
+  // //
+  // tradeStats.sort((statA: any, statB: any) => {
+  //   let spDeltaA = 0.0
+  //   let spDeltaB = 0.0
+  //   if (statA.uniYield && statA.spYield && statA.uniYield.token > 0.0) {
+  //     spDeltaA = 100.0 * (statA.spYield.token - statA.uniYield.token) / statA.uniYield.token
+  //   }
+  //   if (statB.uniYield && statB.spYield && statB.uniYield.token > 0.0) {
+  //     spDeltaB = 100.0 * (statB.spYield.token - statB.uniYield.token) / statB.uniYield.token
+  //   }
+  //   statA.spDelta = spDeltaA
+  //   statB.spDelta = spDeltaB
+  //   return spDeltaB - spDeltaA
+  // })
+
+  // reportPage.content.push({row: 'Single Path Route Data', type: 'section'})
+
+  // reportPage.content.push({row: 'Comparable Trades', type: 'sub-section'})
+  // for (const tradeStat of tradeStats) {
+  //   const hasUniRoute = tradeStat.routeStats ? tradeStat.routeStats.uniRouteFound : false
+  //   if (tradeStat.spYield && hasUniRoute) {
+  //     const { spYield, spDelta, srcSymbol, dstSymbol, src, dst } = tradeStat
+  //     const gainStr = spDelta ? `${spDelta.toFixed(6)}%, ` : ''
+  //     const yieldStr = `, (${spYield.token.toFixed(6)} tokens, ~$${spYield.usd.toFixed(2)} USD)`
+  //     const row = gainStr + `${srcSymbol} --> ${dstSymbol}` + yieldStr
+  //     reportPage.content.push({row, src, dst})
+  //   }
+  // }
+
+  // reportPage.content.push({row: 'Trades With No Uniswap Route', type: 'sub-section'})
+  // for (const tradeStat of tradeStats) {
+  //   const hasUniRoute = tradeStat.routeStats ? tradeStat.routeStats.uniRouteFound : false
+  //   if (!hasUniRoute) {
+  //     const { spYield, srcSymbol, dstSymbol, src, dst } = tradeStat
+  //     const yieldStr = spYield ? 
+  //       `, (${spYield.token.toFixed(6)} tokens, ~$${spYield.usd.toFixed(2)} USD)` : '(No Valve Finance Yield)'
+  //     const row = `${srcSymbol} --> ${dstSymbol}` + yieldStr
+  //     reportPage.content.push({row, src, dst})
+  //   }
+  // }
+
+  // reportPage.content.push({row: 'Trades With No Valve Finance Route', type: 'sub-section'})
+  // for (const tradeStat of tradeStats) {
+  //   const { routeStats } = tradeStat
+  //   if (routeStats) {
+  //     const hasValveFiRoute = routeStats.routesMeetingCriteria > 0
+  //     if (!hasValveFiRoute) {
+  //       const { routesFound, routesMeetingCriteria, uniRouteFound } = routeStats
+  //       let explanationStr = routesFound ? `${routesFound} routes found.` : ''
+  //       explanationStr += routesMeetingCriteria ? ` ${routesMeetingCriteria} meeting supplied criteria.` : ''
+  //       explanationStr += uniRouteFound ? ` Uniswap V2 found route.` : ` Uniswap V2 did not find route.`
+  //       const { srcSymbol, dstSymbol, src, dst } = tradeStat
+  //       const row = `${srcSymbol} --> ${dstSymbol}` + explanationStr
+  //       reportPage.content.push({row, src, dst})
+  //     }
+  //   }
+  // }
+  
+
+  // // Create Multi-Path Content:
+  // //
+  // tradeStats.sort((statA: any, statB: any) => {
+  //   let mpDeltaA = 0.0
+  //   let mpDeltaB = 0.0
+  //   if (statA.uniYield && statA.mpYield && statA.uniYield.token > 0.0) {
+  //     mpDeltaA = 100.0 * (statA.mpYield.token - statA.uniYield.token) / statA.uniYield.token
+  //   }
+  //   if (statB.uniYield && statB.mpYield && statB.uniYield.token > 0.0) {
+  //     mpDeltaB = 100.0 * (statB.mpYield.token - statB.uniYield.token) / statB.uniYield.token
+  //   }
+  //   statA.mpDelta = mpDeltaA
+  //   statB.mpDelta = mpDeltaB
+  //   return mpDeltaB - mpDeltaA
+  // })
+
+  // reportPage.content.push({row: 'Multi-Path Route Data', type: 'section'})
+  
+  // reportPage.content.push({row: 'Comparable Trades', type: 'sub-section'})
+  // for (const tradeStat of tradeStats) {
+  //   const hasUniRoute = tradeStat.routeStats ? tradeStat.routeStats.uniRouteFound : false
+  //   if (tradeStat.mpYield && hasUniRoute) {
+  //     const { mpYield, mpDelta, srcSymbol, dstSymbol, src, dst } = tradeStat
+  //     const gainStr = mpDelta ? `${mpDelta.toFixed(6)}%, ` : ''
+  //     const yieldStr = `, (${mpYield.token.toFixed(6)} tokens, ~$${mpYield.usd.toFixed(2)} USD)`
+  //     const row = gainStr + `${srcSymbol} --> ${dstSymbol}` + yieldStr
+  //     reportPage.content.push({row, src, dst})
+  //   }
+  // }
+
+  // reportPage.content.push({row: 'Trades With No Uniswap Route', type: 'sub-section'})
+  // for (const tradeStat of tradeStats) {
+  //   const hasUniRoute = tradeStat.routeStats ? tradeStat.routeStats.uniRouteFound : false
+  //   if (!hasUniRoute) {
+  //     const { mpYield, srcSymbol, dstSymbol, src, dst } = tradeStat
+  //     const yieldStr = mpYield ?
+  //         `, (${mpYield.token.toFixed(6)} tokens, ~$${mpYield.usd.toFixed(2)} USD)` : '(No Valve Finance Yield)'
+  //     const row = `${srcSymbol} --> ${dstSymbol}` + yieldStr
+  //     reportPage.content.push({row, src, dst})
+  //   }
+  // }
+  
+  // reportPage.content.push({row: 'Trades With No Valve Finance Route', type: 'sub-section'})
+  // for (const tradeStat of tradeStats) {
+  //   const { routeStats } = tradeStat
+  //   if (routeStats) {
+  //     const hasValveFiRoute = routeStats.mpRoutesAfterRmDupLowerOrderPair > 0
+  //     if (!hasValveFiRoute) {
+  //       const { routesFound, routesMeetingCriteria, mpRoutesMeetingCriteria, mpRoutesAfterRmDupLowerOrderPair, uniRouteFound } = routeStats
+  //       let explanationStr = routesFound ? `${routesFound} routes found.` : ''
+  //       explanationStr += routesMeetingCriteria ? ` ${routesMeetingCriteria} meeting supplied criteria.` : ''
+  //       explanationStr += mpRoutesMeetingCriteria ? ` ${mpRoutesMeetingCriteria} meeting multipath criteria.` : ''
+  //       explanationStr += mpRoutesAfterRmDupLowerOrderPair ? ` ${mpRoutesAfterRmDupLowerOrderPair} after removing dup. lower order pairs.` : ''
+  //       explanationStr += uniRouteFound ? ` Uniswap V2 found route.` : ` Uniswap V2 did not find route.`
+  //       const { srcSymbol, dstSymbol, src, dst } = tradeStat
+  //       const row = `${srcSymbol} --> ${dstSymbol}` + explanationStr
+  //       reportPage.content.push({row, src, dst})
+  //     }
+  //   }
+  // }
+
+  return reportPage
 }
 
 export const startSocketServer = async(port: string): Promise<void> => {
@@ -455,9 +954,33 @@ export const startSocketServer = async(port: string): Promise<void> => {
 
   let _uniData: t.UniData = await initUniData()
   let _routeCache = new RouteCache(_uniData.pairGraph, c.deprecatedTokenCnstr)
-  
-  //  TODO: 
-  //        - Look at rate limiting socket requests/commands too.
+ 
+  let _reportSummaries = await loadReportSummaries()
+  let _reportOptions = reportSummariesToOptions(_reportSummaries)
+
+  let _blockNumberOptions = [
+    {
+      key: _uniData.pairData.getLowestBlockNumber(),
+      text: _uniData.pairData.getLowestBlockNumber().toString(),
+      value: _uniData.pairData.getLowestBlockNumber()
+    }
+  ]
+
+  // Lightweight copy of _uniData that permits quote updates on real-time side:
+  //
+  let serializedPairData = deepCopy(_uniData.pairData.serialize())
+  const pairDataDC = new t.Pairs()
+  pairDataDC.deserialize(serializedPairData)
+
+  let _uniDataQuotable: t.UniData = {
+    pairGraph: _uniData.pairGraph,
+    tokenData: _uniData.tokenData,
+    pairData: pairDataDC,               // Can modify with up-to-date quotes w/o affecting report
+    wethPairData: _uniData.wethPairData
+  }
+
+  //  NOTE: 
+  //        - May need to look at rate limiting socket requests/commands too. (TODO)
   //        - May need to tune/multiple process/core to deal with
   //          potential transport close errors when this gets too busy.
   //          See: https://github.com/socketio/socket.io/issues/3025
@@ -471,16 +994,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
       methods: ["GET", "POST"]
     }
   //
-  // TODO: Workaround for now--on long requests the socket ping times out on 
-  //       the client side b/c this process is busy (usually on a 4 hop route).
-  //       When time permits introduce reconnect and a job manager so a client
-  //       can disconnect and retrieve the job status on reconnect:
-  //        - turned off until doing long hop work
-  // const THREE_MIN_IN_MS = 5 * 60 * 1000
-  const socketServer = new socketio.Server(server, { 
-                                             cors: corsObj
-                                            //  pingTimeout: THREE_MIN_IN_MS
-                                           })
+  const socketServer = new socketio.Server(server, { cors: corsObj })
 
   const clientSockets: any = {}
   socketServer.on('connection', (socket: socketio.Socket) => {
@@ -496,7 +1010,6 @@ export const startSocketServer = async(port: string): Promise<void> => {
       const reqType = 'route'
       socket.emit(reqType, { requestId, status: 'Analyzing input parameters.' })
 
-      // TODO: refactor with serverg.ts equivalent code
       log.debug(`\nRoute Request: ${amount} ${source} to ${dest}` +
                 `\n  options: ${JSON.stringify(options, null, 0)}\n`)
       
@@ -509,8 +1022,8 @@ export const startSocketServer = async(port: string): Promise<void> => {
         log.warn(_error)
         socket.emit(reqType, { requestId, status: 'Error, input parameters are incorrect.', error: _error })
       } else {
-        const routeReqObj = await _processRouteReq(_uniData, _routeCache, source, dest, amount, _options)
-        const legacyFmtRoutes = rg.convertRoutesToLegacyFmt(_uniData.pairData, _uniData.tokenData, routeReqObj.routes)
+        const routeReqObj = await _processRouteReq(_uniDataQuotable, _routeCache, source, dest, amount, _options)
+        const legacyFmtRoutes = rg.convertRoutesToLegacyFmt(_uniDataQuotable.pairData, _uniDataQuotable.tokenData, routeReqObj.routes)
         socket.emit(reqType, 
                     {
                       requestId,
@@ -526,9 +1039,9 @@ export const startSocketServer = async(port: string): Promise<void> => {
     socket.on('usdTokenQuote', (source: string, usdAmount: string) => {
       let tokens = ''
 
-      if (!isNaN(parseFloat(usdAmount)) && _uniData.wethPairData) {
-        tokens = getEstimatedTokensFromUSD(_uniData.pairData,
-                                           _uniData.wethPairData,
+      if (!isNaN(parseFloat(usdAmount)) && _uniDataQuotable.wethPairData) {
+        tokens = getEstimatedTokensFromUSD(_uniDataQuotable.pairData,
+                                           _uniDataQuotable.wethPairData,
                                            source.toLowerCase(),
                                            usdAmount)
       }
@@ -544,7 +1057,6 @@ export const startSocketServer = async(port: string): Promise<void> => {
       const reqType = 'multipath'
       socket.emit(reqType, { requestId, status: 'Analyzing input parameters.' })
 
-      // TODO: refactor with serverg.ts equivalent code or ditch serverg.ts
       log.debug(`\nMultipath Route Request: ${amount} ${source} to ${dest}` +
                 `\n  options: ${JSON.stringify(options, null, 0)}\n`)
       
@@ -560,7 +1072,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
       }
 
       _options.max_results.value = 20 
-      const routeData = await _processMultiPathRouteReq(_uniData,
+      const routeData = await _processMultiPathRouteReq(_uniDataQuotable,
                                                         _routeCache,
                                                         source,
                                                         dest,
@@ -579,7 +1091,8 @@ export const startSocketServer = async(port: string): Promise<void> => {
       socket.emit('report-init',
                   { 
                     reportOptionsState: {
-                      existingAnalysisOptions: [],
+                      blockNumberOptions: _blockNumberOptions,
+                      existingAnalysisOptions: _reportOptions,
                       tokenSetOptions: [
                         {
                           key: 'TSO_0',
@@ -635,15 +1148,49 @@ export const startSocketServer = async(port: string): Promise<void> => {
                   })
     })
 
+    socket.on('report-select', async (paramsHash: string) => {
+      const requestId = _getRequestId()
+      const reqType = 'report-select'
+      const path = [ REPORTS_DIR, paramsHash, REPORT_FILE_NAME]
+      const reportFilePath = path.join('/')
+
+      const responseObj = await new Promise((resolve) => {
+        fs.readFile(reportFilePath, (err, data) => {
+          if (err) {
+            resolve({
+              requestId,
+              error: `Failed to read ${reportFilePath}.\n${err}`
+            })
+          } else {
+            try {
+              const reportObj = JSON.parse(data.toString())
+              resolve({
+                requestId,
+                pages: [reportObj]
+              })
+            } catch (parseErr) {
+              resolve({
+                requestId,
+                error: `Failed to process contents of ${reportFilePath}.\n${parseErr}`
+              })
+            }
+          }
+        })
+      })
+
+      socket.emit(reqType, responseObj)
+    })
+
     socket.on('report-generate', async (reportParameters: any) => {
       // Training Wheels:
-      let maxTrades = 250 
+      let maxTrades = 100
 
 
       const requestId = _getRequestId()
       const reqType = 'report-generate'
 
       const {
+        analysisDescription,
         tokenSet,
         tradeAmount,
         proportioningAlgorithm,
@@ -655,26 +1202,22 @@ export const startSocketServer = async(port: string): Promise<void> => {
         removeLowerOrderDuplicatePairs,
         limitSwapsForWETH } = reportParameters
       
-      // 0. Make sure an area to store the report output exists
-      //    TODO: singlton w/ control / queing for writes
+      // -1. Make sure an area to store the report output exists
+      //
       const path = []
-      const REPORTS_DIR = 'reports'
       path.push(REPORTS_DIR)
       if (!fs.existsSync(path.join('/'))) {
         fs.mkdirSync(path.join('/'))
       }
 
-      const PARAMS_HASH = _getReportParametersHash(reportParameters)
-      path.push(PARAMS_HASH)
+      const paramsHash = getReportParametersHash(reportParameters)
+      path.push(paramsHash)
       if (!fs.existsSync(path.join('/'))) {
         fs.mkdirSync(path.join('/'))
-      } else {
-        // TODO: return the existing report
       }
       
       // If the report already exists then return it and skip the trade calculations below
       //
-      const REPORT_FILE_NAME = 'report.json'
       path.push(REPORT_FILE_NAME)
       const reportFilePath = path.join('/')
       if (fs.existsSync(reportFilePath)) {
@@ -692,22 +1235,19 @@ export const startSocketServer = async(port: string): Promise<void> => {
       }
       path.pop()
 
-      const PARAMS_FILE = 'params.json'
       path.push(PARAMS_FILE)
       const paramsFilePath = path.join('/')
-      // TODO: speed this up and rip out sync where sensible here and elsewhere
       fs.writeFileSync(paramsFilePath, JSON.stringify(reportParameters, null, 2))
       path.pop()
 
     
-      // 1. Get the set of tokens that we're trading:
+      // 0. Get the set of tokens that we're trading:
       //    TODO - for now we'll just use the 100M case, but we need to expand this properly
       //
       const _tokenSet: Set<string> = new Set<string>()
 
-      if (tokenSet !== 'Tokens in Pairs with $1M Liquidity') {
+      if (tokenSet !== 'Tokens in pairs that do not include WETH') {
         const _minPairLiquidity = 100000000
-        // TODO: pair data return an iterator to the pairs:
         for (const pairId of _uniData.pairData.getPairIds()) {
           const pair = _uniData.pairData.getPair(pairId)
           const usd = parseFloat(pair.reserveUSD)
@@ -716,26 +1256,46 @@ export const startSocketServer = async(port: string): Promise<void> => {
             _tokenSet.add(pair.token1.id.toLowerCase())
           }
         }
-        log.debug(`Found ${_tokenSet.size} tokens in pairs with > $${_minPairLiquidity} USD liquidity.`)
+        log.debug(`Found ${_tokenSet.size} tokens in pairs with > $${_minPairLiquidity} USD liquidity.\n` +
+                  `tokenSet: ${tokenSet}\n` +
+                  `================================================================================`)
       } else {  /* non-weth pair set */
         // Find all tokens that are in a pair with a token other than WETH:
         //
         for (const pairId of _uniData.pairData.getPairIds()) {
           const pair = _uniData.pairData.getPair(pairId)
           const usd = parseFloat(pair.reserveUSD)
-          // if (usd > _minPairLiquidity) {
-          if (!c.WETH_ADDRS_LC.includes(pair.token0.id.toLowerCase()) &&
-              !c.WETH_ADDRS_LC.includes(pair.token1.id.toLowerCase())) {
-            _tokenSet.add(pair.token0.id.toLowerCase())
-            _tokenSet.add(pair.token1.id.toLowerCase())
+          const _minPairLiquidity = 5000000
+          if (usd > _minPairLiquidity) {
+            if (!c.WETH_ADDRS_LC.includes(pair.token0.id.toLowerCase()) &&
+                !c.WETH_ADDRS_LC.includes(pair.token1.id.toLowerCase())) {
+              _tokenSet.add(pair.token0.id.toLowerCase())
+              _tokenSet.add(pair.token1.id.toLowerCase())
+            }
           }
         }
-        log.debug(`Found ${_tokenSet.size} tokens not in pairs with WETH.`)
+        log.debug(`Found ${_tokenSet.size} tokens not in pairs with WETH.\n` +
+                  `tokenSet: ${tokenSet}\n` +
+                  `================================================================================`)
       }
 
 
-      // 2. For each token, construct a trade to each other token. Set the
-      //    amount to token amount USD.
+      // 1. Construct a list of all the trades we'll be performing so that they
+      //    can be randomized if we're limiting results to get more diverse token arrangments.
+      //    (Randomize by sorting in order of the random value.)
+      //
+      type Trade = {src: string, dst: string, randomValue: number}
+      const trades: Trade[] = []
+      for (const src of _tokenSet) {
+        for (const dst of _tokenSet) {
+          if (src !== dst) {
+            trades.push({src, dst, randomValue: Math.random()})
+          }
+        }
+      }
+      trades.sort((tradeA: Trade, tradeB: Trade) => { return tradeB.randomValue - tradeA.randomValue })   // Asc. order.
+
+      // 1.5. Construct an options object that is applicable to all trades given provided parameters:
       //
       const options = {
         max_hops: {
@@ -755,205 +1315,78 @@ export const startSocketServer = async(port: string): Promise<void> => {
         }
       }
 
-      const tradeStats: any = []
+      if (!_uniData.wethPairData) {
+        throw Error(`wETH pair data needs to be initialized to run reports.`)
+      }
+
+      // 2. For each token, construct a trade to each other token. Set the
+      //    amount to token amount USD.
+      //
+      const tradeStats: TradeStats[] = []
       const pages: any = []
       let tradeCount = 0
-      const tokenArr = [..._tokenSet]
-      for (let srcIdx = 0; 
-           (srcIdx < _tokenSet.size && tradeCount < maxTrades);
-           srcIdx++) {
-        for (let dstIdx = 0;
-             (dstIdx < _tokenSet.size && tradeCount < maxTrades);
-             dstIdx++) {
-          if (srcIdx === dstIdx) {
-            continue
-          }
+      const numTrades = (maxTrades > trades.length) ? trades.length : maxTrades
+      while (tradeCount < numTrades) {
+        const startMs = Date.now()
+        const { src, dst } = (trades[tradeCount])
+        tradeCount++
 
-          const startMs = Date.now()
-          tradeCount++
-          const src = tokenArr[srcIdx]
-          const dst = tokenArr[dstIdx]
-          if (!_uniData.wethPairData) {
-            continue
-          }
-          const amountSrc = getEstimatedTokensFromUSD(_uniData.pairData,
-                                                      _uniData.wethPairData,
-                                                      src,
-                                                      tradeAmount)
+        const amountSrc = getEstimatedTokensFromUSD(_uniData.pairData,
+                                                    _uniData.wethPairData,
+                                                    src,
+                                                    tradeAmount)
 
-          const srcSymbol = _uniData.tokenData.getSymbol(src.toLowerCase())
-          const dstSymbol = _uniData.tokenData.getSymbol(dst.toLowerCase())
-          socket && socket.emit('status', {
-            status: `Processing trade ${tradeCount} of ${maxTrades} (${srcSymbol} --> ${dstSymbol}).`
-          })
+        const srcSymbol = _uniData.tokenData.getSymbol(src.toLowerCase())
+        const dstSymbol = _uniData.tokenData.getSymbol(dst.toLowerCase())
 
-          log.debug(`Processing trade ${tradeCount} of ${maxTrades} (${srcSymbol} --> ${dstSymbol}, ` +
-                    `${amountSrc}tokens, $${tradeAmount}USD).`)
+        if (amountSrc === '') {
+          const failRouteStats = new RouteStats()
+          failRouteStats.vfiError = USDC_CONVERT_ERR
+          const failRouteData = new RouteData(src,
+                                              srcSymbol,
+                                              dst,
+                                              dstSymbol,
+                                              options)
+          failRouteData.setRouteStats(failRouteStats)
 
-          const routeData: RouteData = await _processMultiPathRouteReq(_uniData,
-                                                                       _routeCache,
-                                                                       src,
-                                                                       dst,
-                                                                       amountSrc,
-                                                                       options)
-
-          const routeFileName = `${src}_${dst}.json`
-          path.push(routeFileName)
-          const filePath = path.join('/')
-          fs.writeFile(filePath,
-                       routeData.serialize(),
-                       (err) => { err && log.warn(`Failed to write ${filePath} because\n${err}`) })
-          path.pop()
-
-
-          log.debug(`Trade computed in ${Date.now() - startMs} ms.`)
-
-          tradeStats.push({
-            src,
-            dst,
-            srcSymbol: routeData.getSourceSymbol(),
-            dstSymbol: routeData.getDestSymbol(),
-            uniYield: routeData.getUniYield(),
-            spYield: routeData.getSinglePathValveYield(),
-            mpYield: routeData.getMultiPathValveYield()
-          })
+          const failTradeStats = new TradeStats(failRouteData)
+          tradeStats.push(failTradeStats)
+          continue
         }
+
+        socket && socket.emit('status', {
+          status: `Processing trade ${tradeCount} of ${numTrades} (${srcSymbol} --> ${dstSymbol}).`
+        })
+
+        log.debug(`Processing trade ${tradeCount} of ${numTrades} (${srcSymbol} --> ${dstSymbol}, ` +
+                  `${amountSrc}tokens, $${tradeAmount}USD).`)
+
+        const routeData: RouteData = await _processMultiPathRouteReq(_uniData,
+                                                                      _routeCache,
+                                                                      src,
+                                                                      dst,
+                                                                      amountSrc,
+                                                                      options)
+
+        const routeFileName = `${src}_${dst}.json`
+        path.push(routeFileName)
+        const filePath = path.join('/')
+        fs.writeFile(filePath,
+                      routeData.serialize(),
+                      (err) => { err && log.warn(`Failed to write ${filePath} because\n${err}`) })
+        path.pop()
+
+
+        log.debug(`Trade computed in ${Date.now() - startMs} ms.`)
+
+        tradeStats.push(new TradeStats(routeData))
       }
 
-      const description: any[] = [ {text: 'Parameters', textStyle: 'bold'}]
-      for (const key in reportParameters) {
-        description.push({ text: `${key}:  ${reportParameters[key]}`, textStyle: 'indent'})
-      }
+      // Future - more time:  push these results to a DB and craft the report from the DB
 
-      const reportPage: any = {
-        title: 'Report Summary',
-        description,
-        content: [],
-        elements: [],
-        paramsHash: PARAMS_HASH
-      }
-
-
-      // Create Summary Content at top of report:
+      // 3. Create a report and content:
       //
-      let totalTrades = tradeStats.length
-      let spNoUniRouteTrades = 0
-      let spBetterTrades = 0
-      let spSameTrades = 0
-      let spWorseTrades = 0
-      let spUnknownTrades = 0
-      let mpNoUniRouteTrades = 0
-      let mpBetterTrades = 0
-      let mpSameTrades = 0
-      let mpWorseTrades = 0
-      let mpUnknownTrades = 0
-      // Might need to use thresholds here for equality problems with double types <-- TODO:
-      const ZERO_THRESHOLD = 0.0000000001
-      for (const tradeStat of tradeStats) {
-        if (tradeStat.uniYield) {
-          if (tradeStat.spYield) {
-            if (tradeStat.uniYield.token < ZERO_THRESHOLD) {
-              spNoUniRouteTrades++
-            } else if (tradeStat.spYield.token > tradeStat.uniYield.token) {
-              spBetterTrades++
-              log.debug(`spBetterTrades: sp=${tradeStat.spYield.token}, uni=${tradeStat.uniYield.token}`)
-            } else if (tradeStat.spYield.token < tradeStat.uniYield.token) {
-              spWorseTrades++
-            } else {  
-              spSameTrades++
-            }
-          } else {
-            spUnknownTrades++
-          }
-
-          if (tradeStat.mpYield) {
-            if (tradeStat.uniYield.token < ZERO_THRESHOLD) {
-              mpNoUniRouteTrades++
-            } else if (tradeStat.mpYield.token > tradeStat.uniYield.token) {
-              mpBetterTrades++
-            } else if (tradeStat.mpYield.token < tradeStat.uniYield.token) {
-              mpWorseTrades++
-            } else { 
-              mpSameTrades++
-            }
-          } else {
-            mpUnknownTrades++
-          }
-        } else {
-          spUnknownTrades++
-          mpUnknownTrades++
-        }
-      }
-
-      reportPage.content.push({row: 'Trade Statistics', type: 'h3'})
-      reportPage.content.push({row: `${totalTrades} trades analyzed.`})
-      reportPage.content.push({row: ''})
-      reportPage.content.push({row: 'Single Path Trades:', type: 'bold'})
-      reportPage.content.push({row: `${spBetterTrades} single path trades improved over UNI V2 routing.`, type: 'indent'})
-      reportPage.content.push({row: `${spSameTrades} single path trades the same as UNI V2 routing.`, type: 'indent'})
-      reportPage.content.push({row: `${spWorseTrades} single path trades worse than UNI V2 routing.`, type: 'indent'})
-      reportPage.content.push({row: `${spUnknownTrades} single path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
-      reportPage.content.push({row: `${spNoUniRouteTrades} single path trades with no UNI V2 routing.`, type: 'indent'})
-      reportPage.content.push({row: '', type: 'indent'})
-      reportPage.content.push({row: 'Multi-path Trades:', type: 'bold'})
-      reportPage.content.push({row: `${mpBetterTrades} multi-path trades improved over UNI V2 routing.`, type: 'indent'})
-      reportPage.content.push({row: `${mpSameTrades} multi-path trades the same as UNI V2 routing.`, type: 'indent'})
-      reportPage.content.push({row: `${mpWorseTrades} multi-path trades worse than UNI V2 routing.`, type: 'indent'})
-      reportPage.content.push({row: `${mpUnknownTrades} multi-path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
-      reportPage.content.push({row: `${mpNoUniRouteTrades} multi-path trades with no UNI V2 routing.`, type: 'indent'})
-
-
-      // Create Single Path Content:
-      //
-      tradeStats.sort((statA: any, statB: any) => {
-        let spDeltaA = 0.0
-        let spDeltaB = 0.0
-        if (statA.uniYield && statA.spYield && statA.uniYield.token > 0.0) {
-          spDeltaA = 100.0 * (statA.spYield.token - statA.uniYield.token) / statA.uniYield.token
-        }
-        if (statB.uniYield && statB.spYield && statB.uniYield.token > 0.0) {
-          spDeltaB = 100.0 * (statB.spYield.token - statB.uniYield.token) / statB.uniYield.token
-        }
-        statA.spDelta = spDeltaA
-        statB.spDelta = spDeltaB
-        return spDeltaB - spDeltaA
-      })
-
-      reportPage.content.push({row: 'Single Path Route Data', type: 'h3'})
-      for (const tradeStat of tradeStats) {
-        const yieldStr = (tradeStat.spYield) ? 
-          `, (${tradeStat.spYield.token.toFixed(6)} tokens, ~$${tradeStat.spYield.usd.toFixed(2)} USD)` : `, (???)`
-        const row = `${tradeStat.spDelta.toFixed(6)}%, ` +
-                    `${tradeStat.srcSymbol} --> ${tradeStat.dstSymbol}` + yieldStr
-        reportPage.content.push({row, src: tradeStat.src, dst: tradeStat.dst})
-      }
-      
-
-      // Create Multi-Path Content:
-      //
-      tradeStats.sort((statA: any, statB: any) => {
-        let mpDeltaA = 0.0
-        let mpDeltaB = 0.0
-        if (statA.uniYield && statA.mpYield && statA.uniYield.token > 0.0) {
-          mpDeltaA = 100.0 * (statA.mpYield.token - statA.uniYield.token) / statA.uniYield.token
-        }
-        if (statB.uniYield && statB.mpYield && statB.uniYield.token > 0.0) {
-          mpDeltaB = 100.0 * (statB.mpYield.token - statB.uniYield.token) / statB.uniYield.token
-        }
-        statA.mpDelta = mpDeltaA
-        statB.mpDelta = mpDeltaB
-        return mpDeltaB - mpDeltaA
-      })
-
-      reportPage.content.push({row: 'Multi-Path Route Data', type: 'h3'})
-      for (const tradeStat of tradeStats) {
-        const yieldStr = (tradeStat.mpYield) ? 
-          `, (${tradeStat.mpYield.token.toFixed(6)} tokens, ~$${tradeStat.mpYield.usd.toFixed(2)} USD)` : `, (???)`
-        const row = `${tradeStat.mpDelta.toFixed(6)}%, ` +
-                    `${tradeStat.srcSymbol} --> ${tradeStat.dstSymbol}` + yieldStr
-        reportPage.content.push({row, src: tradeStat.src, dst: tradeStat.dst})
-      }
-
+      const reportPage = _createReport(reportParameters, paramsHash, tradeStats)
       pages.unshift(reportPage)
 
       socket.emit(reqType, {
@@ -961,10 +1394,26 @@ export const startSocketServer = async(port: string): Promise<void> => {
         pages
       })
 
-      // Store the report page
+      // Store the report page 
       fs.writeFile(reportFilePath,
                    JSON.stringify(reportPage),
                    (err) => { err && log.warn(`Failed to write ${reportFilePath} because\n${err}`) })
+      
+      // Update the report summaries data and broadcast it to 
+      // all connected clients:
+      //
+      _reportSummaries.push({
+        reportSubdir: paramsHash,
+        params: reportParameters
+      })
+      _reportOptions = reportSummariesToOptions(_reportSummaries)
+      for (const socketId in clientSockets) {
+        const clientSocket = clientSockets[socketId]
+        log.debug(`Emitting 'report-update' to ${socketId} (${clientSocket ? 'socket exists' : 'socket undefined'})`)
+        clientSocket.emit('report-update', { 
+          existingAnalysisOptions: _reportOptions
+        })
+      }
     })
 
     socket.on('report-fetch-route', async (routeParameters: any) => {

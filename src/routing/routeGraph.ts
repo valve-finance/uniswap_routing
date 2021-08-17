@@ -400,16 +400,17 @@ export const removeRoutesWithLowerOrderPairs = (routes: t.VFRoutes,
       })
     }
   }
-  console.log(`Route analysis:\n` +
-              `================================================================================\n` +
-              `${JSON.stringify(routeAnalysis, null, 2)}`)
+  // log.debug(`Route analysis:\n` +
+  //          `================================================================================\n` +
+  //          `${JSON.stringify(routeAnalysis, null, 2)}`)
   
   /* Now remove routes that re-use pairs with slippage above a threshold, n, in later route hops.
    * i.e. If route 1 uses pair X in the first hop and route 2 uses pair X in the second hop, exclude
    *      route 2.
-   * TODO: this could easily be done with a crawl of the tree and populating a dictionary (realized this
+   * NOTE: this could easily be done with a crawl of the tree and populating a dictionary (realized this
    *       after writing the working code below) for later pruning of routes.
    */
+  // TODO: this should be a parameter with an explanation
   const MAX_SLIPPAGE = 2.0    // Impact
   const excludeRoutes: string[] = []
   for (const pairId in routeAnalysis.pairs) {
@@ -439,9 +440,6 @@ export const removeRoutesWithLowerOrderPairs = (routes: t.VFRoutes,
       // Don't remove the pair if it's in the first hop we've found using this pair in any of the routes:
       //
       if (firstHop) {
-        //    - TODO: special case, pairs in the same hop but with different impacts (implies that they are different
-        //            paths).
-        //
         firstHop = false
         continue
       }

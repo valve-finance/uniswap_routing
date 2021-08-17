@@ -41,9 +41,15 @@ export interface PairDict { [index: string]: Pair }
 export class Pairs {
   constructor() {
     this._pairs = {}
+    this._lowestBlockNumber = -1
+    this._updatedSinceLBN = false   // Updated since lowest block number (tells
+                                    // us if this data is not uniform wrt block number).
+                                    // Not ideal since objects are not immutable
+                                    // for get pairs, but good enough for now.
   }
 
   public addPair(pair: Pair): void {
+    this._updatedSinceLBN = true
     const _pair: Pair = {
       id: pair.id.toLowerCase(),
       reserve0: pair.reserve0,
@@ -71,6 +77,7 @@ export class Pairs {
 
   // TODO: remove this and move to cache w/ TTL
   public updatePairs(updatedPairs: PairLite[], updateTimeMs: number): void {
+    this._updatedSinceLBN = true
     for (const updatedPair of updatedPairs) {
       const pair = this._pairs[updatedPair.id]
       if (pair) {
@@ -90,21 +97,40 @@ export class Pairs {
     return Object.keys(this._pairs)
   }
 
+  public setLowestBlockNumber(lbn: number): void {
+    this._lowestBlockNumber = lbn
+  }
+
+  public getLowestBlockNumber(): number {
+    return this._lowestBlockNumber
+  }
+
+  public clearUpdatedSinceLowestBlockNumber(): void {
+    this._updatedSinceLBN = false
+  }
+
   /**
    *  Serialization / Deserialization methods 
    */
-  public deserialize(tokenDict: PairDict): void {
-    this._pairs = tokenDict
+  public deserialize(serializedObj: any): void {
+    this._pairs = serializedObj.pairs
+    this._lowestBlockNumber = serializedObj.lowestBlockNumber
+    this._updatedSinceLBN = false
   }
 
-  public serialize(): PairDict {
-    return this._pairs
+  public serialize(): any {
+    return { 
+      pairs: this._pairs,
+      lowestBlockNumber: this._lowestBlockNumber
+    }
   }
   
   /**
    * Members ...
    */
   private _pairs: PairDict
+  private _lowestBlockNumber: number
+  private _updatedSinceLBN: boolean
 }
 
 /*

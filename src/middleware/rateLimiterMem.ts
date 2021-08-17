@@ -36,14 +36,6 @@ import * as ds from './../utils/debugScopes'
  // HTTP Status Codes:
  const TOO_MANY_REQUESTS = 429
           
- // TODO: 
- //  - redis or other key store.
- //  - reconsider limits and splitting limites depending on request type (for 
- //    instance it may be that registerUser only gets called once, but the    
- //    fetching of notifications might happen more.)  For now 1020 an hour    
- //    probably suffices for users and might be insufficient for developers.  
- //  - alarm when rate limit is hit
- 
  const rateLimiter = new RateLimiterMemory({                                  
    keyPrefix: 'middleware',
    points: 34,   // 34 requests
