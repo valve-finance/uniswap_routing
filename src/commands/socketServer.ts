@@ -626,16 +626,16 @@ const _createReport = (reportParameters: any,
     }
   }
 
-  content.push({row: `${spBetter.length} Better Performing Single Path Routes`, type: 'sub-section'})
+  content.push({row: `${spBetter.length} Better Performing Single Path Routes`, type: 'sub-section', collapsible: (spBetter.length > 0)})
   spBetter.forEach((row: any) => { content.push(row)})
 
-  content.push({row: `${spWorse.length} Lower Performing Single Path Routes`, type: 'sub-section'})
+  content.push({row: `${spWorse.length} Lower Performing Single Path Routes`, type: 'sub-section', collapsible: (spWorse.length > 0)})
   spWorse.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${spSame.length} Same Performing Single Path Routes`, type: 'sub-section'})
+  content.push({row: `${spSame.length} Same Performing Single Path Routes`, type: 'sub-section', collapsible: (spSame.length > 0)})
   spSame.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${spIncomparable.length} Incomparable Performance Single Path Routes`, type: 'sub-section'})
+  content.push({row: `${spIncomparable.length} Incomparable Performance Single Path Routes`, type: 'sub-section', collapsible: (spIncomparable.length > 0)})
   spIncomparable.forEach((row: any) => { content.push(row)})
 
   
@@ -701,16 +701,16 @@ const _createReport = (reportParameters: any,
     }
   }
 
-  content.push({row: `${mpBetter.length} Better Performing Multi-Path Routes`, type: 'sub-section'})
+  content.push({row: `${mpBetter.length} Better Performing Multi-Path Routes`, type: 'sub-section', collapsible: (mpBetter.length > 0)})
   mpBetter.forEach((row: any) => { content.push(row)})
 
-  content.push({row: `${mpWorse.length} Lower Performing Multi-Path Routes`, type: 'sub-section'})
+  content.push({row: `${mpWorse.length} Lower Performing Multi-Path Routes`, type: 'sub-section', collapsible: (mpWorse.length > 0)})
   mpWorse.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${mpSame.length} Same Performing Multi-Path Routes`, type: 'sub-section'})
+  content.push({row: `${mpSame.length} Same Performing Multi-Path Routes`, type: 'sub-section', collapsible: (mpSame.length > 0)})
   mpSame.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${mpIncomparable.length} Incomparable Performance Multi-Path Routes`, type: 'sub-section'})
+  content.push({row: `${mpIncomparable.length} Incomparable Performance Multi-Path Routes`, type: 'sub-section', collapsible: (mpIncomparable.length > 0)})
   mpIncomparable.forEach((row: any) => { content.push(row)})
   
   // Exceptions Section:
@@ -718,208 +718,20 @@ const _createReport = (reportParameters: any,
   //////////////////////////////////////////////////////////////////////////////
   content.push({row: 'Exceptions Preventing Analysis', type: 'section'})
 
-  content.push({row: `${uniFail.length} Routes Uniswap V2 Could Not Find`, type: 'sub-section'})
+  content.push({row: `${uniFail.length} Routes Uniswap V2 Could Not Find`, type: 'sub-section', collapsible: (uniFail.length > 0)})
   uniFail.forEach((row: any) => { content.push(row)})
 
-  content.push({row: `${spFail.length} Routes Valve Finance Could Not Find`, type: 'sub-section'})
+  content.push({row: `${spFail.length} Routes Valve Finance Could Not Find`, type: 'sub-section', collapsible: (spFail.length > 0)})
   spFail.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${spCriteriaFail.length} Routes That Did Not Fit The Specified Criteria`, type: 'sub-section'})
+  content.push({row: `${spCriteriaFail.length} Routes That Did Not Fit The Specified Criteria`, type: 'sub-section', collapsible: (spCriteriaFail.length > 0)})
   spCriteriaFail.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${mpCriteriaFail.length} Routes That Did Not Fit The Specified Multi-Path Criteria`, type: 'sub-section'})
+  content.push({row: `${mpCriteriaFail.length} Routes That Did Not Fit The Specified Multi-Path Criteria`, type: 'sub-section', collapsible: (mpCriteriaFail.length > 0)})
   mpCriteriaFail.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${spUsdcConvFail.length} Routes That Could Not Be Evaluated From An Initial Amount In $USD`, type: 'sub-section'})
+  content.push({row: `${spUsdcConvFail.length} Routes That Could Not Be Evaluated From An Initial Amount In $USD`, type: 'sub-section', collapsible: (spUsdcConvFail.length > 0)})
   spUsdcConvFail.forEach((row: any) => { content.push(row)})
-
-
-
-  // // Create Summary Content at top of report:
-  // //
-  // let spNoUniRouteTrades = 0
-  // let spBetterTrades = 0
-  // let spSameTrades = 0
-  // let spWorseTrades = 0
-  // let spUnknownTrades = 0
-  // let mpNoUniRouteTrades = 0
-  // let mpBetterTrades = 0
-  // let mpSameTrades = 0
-  // let mpWorseTrades = 0
-  // let mpUnknownTrades = 0
-  // for (const tradeStat of tradeStats) {
-  //   if (tradeStat.uniYield) {
-  //     if (tradeStat.spYield) {
-  //       if (tradeStat.uniYield.token < ZERO_THRESHOLD) {
-  //         spNoUniRouteTrades++
-  //       } else if (tradeStat.spYield.token > tradeStat.uniYield.token) {
-  //         spBetterTrades++
-  //         log.debug(`spBetterTrades: sp=${tradeStat.spYield.token}, uni=${tradeStat.uniYield.token}`)
-  //       } else if (tradeStat.spYield.token < tradeStat.uniYield.token) {
-  //         spWorseTrades++
-  //       } else {  
-  //         spSameTrades++
-  //       }
-  //     } else {
-  //       spUnknownTrades++
-  //     }
-
-  //     if (tradeStat.mpYield) {
-  //       if (tradeStat.uniYield.token < ZERO_THRESHOLD) {
-  //         mpNoUniRouteTrades++
-  //       } else if (tradeStat.mpYield.token > tradeStat.uniYield.token) {
-  //         mpBetterTrades++
-  //       } else if (tradeStat.mpYield.token < tradeStat.uniYield.token) {
-  //         mpWorseTrades++
-  //       } else { 
-  //         mpSameTrades++
-  //       }
-  //     } else {
-  //       mpUnknownTrades++
-  //     }
-  //   } else {
-  //     spUnknownTrades++
-  //     mpUnknownTrades++
-  //   }
-  // }
-
-  // reportPage.content.push({row: 'Trade Statistics', type: 'section'})
-  // reportPage.content.push({row: ''})
-  // reportPage.content.push({row: 'Single Path Trades:', type: 'bold'})
-  // reportPage.content.push({row: `${spBetterTrades} single path trades improved over UNI V2 routing.`, type: 'indent'})
-  // reportPage.content.push({row: `${spSameTrades} single path trades the same as UNI V2 routing.`, type: 'indent'})
-  // reportPage.content.push({row: `${spWorseTrades} single path trades worse than UNI V2 routing.`, type: 'indent'})
-  // reportPage.content.push({row: `${spUnknownTrades} single path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
-  // reportPage.content.push({row: `${spNoUniRouteTrades} single path trades with no UNI V2 routing.`, type: 'indent'})
-  // reportPage.content.push({row: '', type: 'indent'})
-  // reportPage.content.push({row: 'Multi-path Trades:', type: 'bold'})
-  // reportPage.content.push({row: `${mpBetterTrades} multi-path trades improved over UNI V2 routing.`, type: 'indent'})
-  // reportPage.content.push({row: `${mpSameTrades} multi-path trades the same as UNI V2 routing.`, type: 'indent'})
-  // reportPage.content.push({row: `${mpWorseTrades} multi-path trades worse than UNI V2 routing.`, type: 'indent'})
-  // reportPage.content.push({row: `${mpUnknownTrades} multi-path trades cannot be compared to UNI V2 routing.`, type: 'indent'})
-  // reportPage.content.push({row: `${mpNoUniRouteTrades} multi-path trades with no UNI V2 routing.`, type: 'indent'})
-
-
-  // // Create Single Path Content:
-  // //
-  // tradeStats.sort((statA: any, statB: any) => {
-  //   let spDeltaA = 0.0
-  //   let spDeltaB = 0.0
-  //   if (statA.uniYield && statA.spYield && statA.uniYield.token > 0.0) {
-  //     spDeltaA = 100.0 * (statA.spYield.token - statA.uniYield.token) / statA.uniYield.token
-  //   }
-  //   if (statB.uniYield && statB.spYield && statB.uniYield.token > 0.0) {
-  //     spDeltaB = 100.0 * (statB.spYield.token - statB.uniYield.token) / statB.uniYield.token
-  //   }
-  //   statA.spDelta = spDeltaA
-  //   statB.spDelta = spDeltaB
-  //   return spDeltaB - spDeltaA
-  // })
-
-  // reportPage.content.push({row: 'Single Path Route Data', type: 'section'})
-
-  // reportPage.content.push({row: 'Comparable Trades', type: 'sub-section'})
-  // for (const tradeStat of tradeStats) {
-  //   const hasUniRoute = tradeStat.routeStats ? tradeStat.routeStats.uniRouteFound : false
-  //   if (tradeStat.spYield && hasUniRoute) {
-  //     const { spYield, spDelta, srcSymbol, dstSymbol, src, dst } = tradeStat
-  //     const gainStr = spDelta ? `${spDelta.toFixed(6)}%, ` : ''
-  //     const yieldStr = `, (${spYield.token.toFixed(6)} tokens, ~$${spYield.usd.toFixed(2)} USD)`
-  //     const row = gainStr + `${srcSymbol} --> ${dstSymbol}` + yieldStr
-  //     reportPage.content.push({row, src, dst})
-  //   }
-  // }
-
-  // reportPage.content.push({row: 'Trades With No Uniswap Route', type: 'sub-section'})
-  // for (const tradeStat of tradeStats) {
-  //   const hasUniRoute = tradeStat.routeStats ? tradeStat.routeStats.uniRouteFound : false
-  //   if (!hasUniRoute) {
-  //     const { spYield, srcSymbol, dstSymbol, src, dst } = tradeStat
-  //     const yieldStr = spYield ? 
-  //       `, (${spYield.token.toFixed(6)} tokens, ~$${spYield.usd.toFixed(2)} USD)` : '(No Valve Finance Yield)'
-  //     const row = `${srcSymbol} --> ${dstSymbol}` + yieldStr
-  //     reportPage.content.push({row, src, dst})
-  //   }
-  // }
-
-  // reportPage.content.push({row: 'Trades With No Valve Finance Route', type: 'sub-section'})
-  // for (const tradeStat of tradeStats) {
-  //   const { routeStats } = tradeStat
-  //   if (routeStats) {
-  //     const hasValveFiRoute = routeStats.routesMeetingCriteria > 0
-  //     if (!hasValveFiRoute) {
-  //       const { routesFound, routesMeetingCriteria, uniRouteFound } = routeStats
-  //       let explanationStr = routesFound ? `${routesFound} routes found.` : ''
-  //       explanationStr += routesMeetingCriteria ? ` ${routesMeetingCriteria} meeting supplied criteria.` : ''
-  //       explanationStr += uniRouteFound ? ` Uniswap V2 found route.` : ` Uniswap V2 did not find route.`
-  //       const { srcSymbol, dstSymbol, src, dst } = tradeStat
-  //       const row = `${srcSymbol} --> ${dstSymbol}` + explanationStr
-  //       reportPage.content.push({row, src, dst})
-  //     }
-  //   }
-  // }
-  
-
-  // // Create Multi-Path Content:
-  // //
-  // tradeStats.sort((statA: any, statB: any) => {
-  //   let mpDeltaA = 0.0
-  //   let mpDeltaB = 0.0
-  //   if (statA.uniYield && statA.mpYield && statA.uniYield.token > 0.0) {
-  //     mpDeltaA = 100.0 * (statA.mpYield.token - statA.uniYield.token) / statA.uniYield.token
-  //   }
-  //   if (statB.uniYield && statB.mpYield && statB.uniYield.token > 0.0) {
-  //     mpDeltaB = 100.0 * (statB.mpYield.token - statB.uniYield.token) / statB.uniYield.token
-  //   }
-  //   statA.mpDelta = mpDeltaA
-  //   statB.mpDelta = mpDeltaB
-  //   return mpDeltaB - mpDeltaA
-  // })
-
-  // reportPage.content.push({row: 'Multi-Path Route Data', type: 'section'})
-  
-  // reportPage.content.push({row: 'Comparable Trades', type: 'sub-section'})
-  // for (const tradeStat of tradeStats) {
-  //   const hasUniRoute = tradeStat.routeStats ? tradeStat.routeStats.uniRouteFound : false
-  //   if (tradeStat.mpYield && hasUniRoute) {
-  //     const { mpYield, mpDelta, srcSymbol, dstSymbol, src, dst } = tradeStat
-  //     const gainStr = mpDelta ? `${mpDelta.toFixed(6)}%, ` : ''
-  //     const yieldStr = `, (${mpYield.token.toFixed(6)} tokens, ~$${mpYield.usd.toFixed(2)} USD)`
-  //     const row = gainStr + `${srcSymbol} --> ${dstSymbol}` + yieldStr
-  //     reportPage.content.push({row, src, dst})
-  //   }
-  // }
-
-  // reportPage.content.push({row: 'Trades With No Uniswap Route', type: 'sub-section'})
-  // for (const tradeStat of tradeStats) {
-  //   const hasUniRoute = tradeStat.routeStats ? tradeStat.routeStats.uniRouteFound : false
-  //   if (!hasUniRoute) {
-  //     const { mpYield, srcSymbol, dstSymbol, src, dst } = tradeStat
-  //     const yieldStr = mpYield ?
-  //         `, (${mpYield.token.toFixed(6)} tokens, ~$${mpYield.usd.toFixed(2)} USD)` : '(No Valve Finance Yield)'
-  //     const row = `${srcSymbol} --> ${dstSymbol}` + yieldStr
-  //     reportPage.content.push({row, src, dst})
-  //   }
-  // }
-  
-  // reportPage.content.push({row: 'Trades With No Valve Finance Route', type: 'sub-section'})
-  // for (const tradeStat of tradeStats) {
-  //   const { routeStats } = tradeStat
-  //   if (routeStats) {
-  //     const hasValveFiRoute = routeStats.mpRoutesAfterRmDupLowerOrderPair > 0
-  //     if (!hasValveFiRoute) {
-  //       const { routesFound, routesMeetingCriteria, mpRoutesMeetingCriteria, mpRoutesAfterRmDupLowerOrderPair, uniRouteFound } = routeStats
-  //       let explanationStr = routesFound ? `${routesFound} routes found.` : ''
-  //       explanationStr += routesMeetingCriteria ? ` ${routesMeetingCriteria} meeting supplied criteria.` : ''
-  //       explanationStr += mpRoutesMeetingCriteria ? ` ${mpRoutesMeetingCriteria} meeting multipath criteria.` : ''
-  //       explanationStr += mpRoutesAfterRmDupLowerOrderPair ? ` ${mpRoutesAfterRmDupLowerOrderPair} after removing dup. lower order pairs.` : ''
-  //       explanationStr += uniRouteFound ? ` Uniswap V2 found route.` : ` Uniswap V2 did not find route.`
-  //       const { srcSymbol, dstSymbol, src, dst } = tradeStat
-  //       const row = `${srcSymbol} --> ${dstSymbol}` + explanationStr
-  //       reportPage.content.push({row, src, dst})
-  //     }
-  //   }
-  // }
 
   return reportPage
 }
