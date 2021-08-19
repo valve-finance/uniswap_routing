@@ -773,7 +773,7 @@ const _createReport = (reportParameters: any,
   content.push({row: `${mpCriteriaFail.length} - Routes Did Not Match Specified Multi-Path Criteria`, type: 'sub-section', collapsible: (mpCriteriaFail.length > 0)})
   mpCriteriaFail.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${spUsdcConvFail.length} - Routes Could'nt Be Evaluated From A $USD Initial Amount`, type: 'sub-section', collapsible: (spUsdcConvFail.length > 0)})
+  content.push({row: `${spUsdcConvFail.length} - Routes Couldn't Be Evaluated From A $USD Initial Amount`, type: 'sub-section', collapsible: (spUsdcConvFail.length > 0)})
   spUsdcConvFail.forEach((row: any) => { content.push(row)})
 
   return reportPage
@@ -1048,7 +1048,11 @@ export const startSocketServer = async(port: string): Promise<void> => {
       }
       
       // If the report already exists then return it and skip the trade calculations below
-      //
+      // //  - two approaches, in memory and on disk
+      // const existingReport = _reportSummaries.filter((summary: any) => summary.reportSubdir === paramsHash)
+      // if (existingReport) {
+
+      // }
       path.push(REPORT_FILE_NAME)
       const reportFilePath = path.join('/')
       if (fs.existsSync(reportFilePath)) {
