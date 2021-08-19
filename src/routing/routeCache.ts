@@ -1,10 +1,11 @@
 import * as ds from '../utils/debugScopes'
 import * as t from '../utils/types'
 import * as r from './routeGraph'
+import LRUCache from 'lru-cache'
 
 const log = ds.getLog('routeCache')
 
-
+const MAX_CACHE_ENTRIES = 10000
 export interface RouteOptionArg {
   forceUpdate?: boolean,
   maxAgeMs?: number,
@@ -25,9 +26,10 @@ interface RouteCacheEntry {
 interface RouteCacheMap {
   oldestRouteMs: number,
   newestRouteMs: number,
-  cacheMap: {
-    [index: string]: RouteCacheEntry
-  }
+  cacheMap: LRUCache<string, RouteCacheEntry>
+  // cacheMap: {
+  //   [index: string]: RouteCacheEntry
+  // }
 }
 
 // TODO: modify this abstraction to use Redis
@@ -38,7 +40,7 @@ export class RouteCache {
     this._routeCache = {
       oldestRouteMs: 0,
       newestRouteMs: 0,
-      cacheMap: {}
+      cacheMap: new LRUCache<string, RouteCacheEntry>(MAX_CACHE_ENTRIES)
     }
 
     this._routeConstraints = constraints ? constraints : { maxDistance: 3 }
@@ -60,10 +62,6 @@ export class RouteCache {
       maxHops: options.maxHops !== undefined ? options.maxHops : 0
     }
 
-    const start = Date.now()
-    const key = RouteCache.getCacheKey(srcId, dstId)
-    let routesEntry: RouteCacheEntry = this._routeCache.cacheMap[key]
-
     // Special case - bypass the cache if the specified max hops exceeds that for the
     //                cache:
     if (this._routeConstraints.maxDistance &&
@@ -77,6 +75,12 @@ export class RouteCache {
       const routes: t.VFRoutes = r.unstackRoutes(stackedRoutes)
       return routes
     }
+
+    const start = Date.now()
+    const key = RouteCache.getCacheKey(srcId, dstId)
+    let routesEntry: RouteCacheEntry | undefined = this._routeCache.cacheMap.get(key)
+    // let routesEntry: RouteCacheEntry = this._routeCache.cacheMap[key]
+
     if (!routesEntry ||
         _options.forceUpdate ||
         RouteCache._routesTooOld(routesEntry, _options.maxAgeMs)) {
@@ -90,7 +94,8 @@ export class RouteCache {
         updatedMs: Date.now(),
         routes: routes
       }
-      this._routeCache.cacheMap[key] = newRouteEntry
+      this._routeCache.cacheMap.set(key, newRouteEntry)
+      // this._routeCache.cacheMap[key] = newRouteEntry
       routesEntry = newRouteEntry
     }
 

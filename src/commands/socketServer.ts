@@ -35,7 +35,50 @@ const rateLimitMem = require('./../middleware/rateLimiterMem.js')
 
 const log = ds.getLog('socketServer')
 const USDC_CONVERT_ERR = 'Cannot convert USDC to source tokens.'
+const DELTA_PRECISION = 6
+const DELTA_ZERO_THRESHOLD = 1.0 * Math.pow(10, -DELTA_PRECISION)
 
+const TOKEN_SET_NAMES: any = {
+  NO_WETH_MIN_100M: 'Tokens in pairs beyond WETH, liquidity > $100M',
+  NO_WETH_MIN_50M: 'Tokens in pairs beyond WETH, liquidity > 50M',
+  NO_WETH_MIN_25M: 'Tokens in pairs beyond WETH, liquidity > 25M',
+  NO_HUB_MIN_50M: 'Tokens in pairs beyond hub tokens, liquidity > $50M',
+  NO_HUB_MIN_25M: 'Tokens in pairs beyond hub tokens, liquidity > $25M',
+  UNI_DEFAULT: 'Uniswap default list tokens'
+}
+
+const getTokensInPairs = (pairData: t.Pairs,
+                          excludePairsWithTokens: string[] = [],
+                          minLiquidity?: number,
+                          maxLiquidity?: number): Set<string> =>
+{
+  const _tokenSet = new Set<string>()
+  for (const pairId of pairData.getPairIds()) {
+    const pair = pairData.getPair(pairId)
+
+    const usd = parseFloat(pair.reserveUSD)
+    if (minLiquidity && usd < minLiquidity) {
+      continue
+    }
+    if (maxLiquidity && usd >= maxLiquidity) {
+      continue
+    }
+
+    const { token0, token1 } = pair
+    const lcToken0Addr = token0.id.toLowerCase()
+    const lcToken1Addr = token1.id.toLowerCase()
+    if (excludePairsWithTokens.length > 0 &&
+        (excludePairsWithTokens.includes(lcToken0Addr) ||
+         excludePairsWithTokens.includes(lcToken1Addr)) ) {
+      continue
+    }
+
+    _tokenSet.add(lcToken0Addr)
+    _tokenSet.add(lcToken1Addr)
+  }
+
+  return _tokenSet
+}
 
 // Placeholder until we get bull / redis in
 const _getRequestId = (): string => {
@@ -417,7 +460,7 @@ const _routeDataToPages = (routeData: RouteData): any =>
     const difference = routeData.getDifferenceSinglePath()
     const differenceUSD = routeData.getDifferenceSinglePath(true)
     if (!isNaN(delta)) {
-      comparisonStr = `${delta.toFixed(6)}%`
+      comparisonStr = `${delta.toFixed(DELTA_PRECISION)}%`
 
       if (!isNaN(differenceUSD)) {
         comparisonStr += ` ($${differenceUSD.toFixed(2)} USD)`
@@ -486,7 +529,7 @@ const _routeDataToPages = (routeData: RouteData): any =>
     const difference = routeData.getDifferenceMultiPath()
     const differenceUSD = routeData.getDifferenceMultiPath(true)
     if (!isNaN(delta)) {
-      comparisonStr = `${delta.toFixed(6)}%`
+      comparisonStr = `${delta.toFixed(DELTA_PRECISION)}%`
 
       if (!isNaN(differenceUSD)) {
         comparisonStr += ` ($${differenceUSD.toFixed(2)} USD)`
@@ -535,7 +578,8 @@ const _createReport = (reportParameters: any,
   const reportPage: any = {
     title: 'Report Summary',
     description: [ {text: reportParameters.analysisDescription},
-                   {text: `${tradeStats.length} trades between tokens analyzed.`} ],
+                   {text: `${tradeStats.length} trades between tokens analyzed.`},
+                   {text: `Note: Performance compared to ${DELTA_PRECISION} decimal places of a percent.`} ],
     content: [],
     elements: [],
     paramsHash
@@ -551,7 +595,6 @@ const _createReport = (reportParameters: any,
   }
 
 
-  const ZERO_THRESHOLD = 0.0000000000000000001   // 1^-18
 
   // Single Path Route Results Section:
   //
@@ -610,32 +653,32 @@ const _createReport = (reportParameters: any,
           /* special case, uni result is 0, would give delta of infinity,
             likely due to no UNI route. */
           spIncomparable.push({row, src, dst, view: true})
-        } else if (Math.abs(spDelta) < ZERO_THRESHOLD) {
+        } else if (Math.abs(spDelta) > DELTA_ZERO_THRESHOLD) {
+          if (spDelta < 0) {
+            row = `${spDelta.toFixed(DELTA_PRECISION)}% worse, ` + row
+            spWorse.push({row, src, dst, view: true})
+          } else {
+            row = `+${spDelta.toFixed(DELTA_PRECISION)}% better, ` + row
+            spBetter.push({row, src, dst, view: true})
+          }
+        } else {
           /* same - can't compare equality on doubles, so threshold */
           spSame.push({row, src, dst, view: true})
-        } else if (tradeStat.spDelta > 0) {
-          row = `+${tradeStat.spDelta.toFixed(6)}% better, ` + row
-          spBetter.push({row, src, dst, view: true})
-        } else if (tradeStat.spDelta < 0) {
-          row = `${tradeStat.spDelta.toFixed(6)}% worse, ` + row
-          spWorse.push({row, src, dst, view: true})
-        } else  {
-          log.error(`Failed to categorize trade for report, continuing:`, tradeStat)
         }
       }
     }
   }
 
-  content.push({row: `${spBetter.length} Better Performing Single Path Routes`, type: 'sub-section', collapsible: (spBetter.length > 0)})
+  content.push({row: `${spBetter.length} - Single Path Routes Performed Better`, type: 'sub-section', collapsible: (spBetter.length > 0)})
   spBetter.forEach((row: any) => { content.push(row)})
 
-  content.push({row: `${spWorse.length} Lower Performing Single Path Routes`, type: 'sub-section', collapsible: (spWorse.length > 0)})
+  content.push({row: `${spWorse.length} - Single Path Routes Performed Lower`, type: 'sub-section', collapsible: (spWorse.length > 0)})
   spWorse.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${spSame.length} Same Performing Single Path Routes`, type: 'sub-section', collapsible: (spSame.length > 0)})
+  content.push({row: `${spSame.length} - Single Path Routes Performed Similarly`, type: 'sub-section', collapsible: (spSame.length > 0)})
   spSame.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${spIncomparable.length} Incomparable Performance Single Path Routes`, type: 'sub-section', collapsible: (spIncomparable.length > 0)})
+  content.push({row: `${spIncomparable.length} - Single Path Routes Couldn't Be Compared`, type: 'sub-section', collapsible: (spIncomparable.length > 0)})
   spIncomparable.forEach((row: any) => { content.push(row)})
 
   
@@ -685,32 +728,32 @@ const _createReport = (reportParameters: any,
           /* mpecial case, uni result is 0, would give delta of infinity,
             likely due to no UNI route. */
           mpIncomparable.push({row, src, dst, view: true})
-        } else if (Math.abs(mpDelta) < ZERO_THRESHOLD) {
+        } else if (Math.abs(mpDelta) > DELTA_ZERO_THRESHOLD) {
+          if (mpDelta < 0) {
+            row = `${tradeStat.mpDelta.toFixed(DELTA_PRECISION)}% worse, ` + row
+            mpWorse.push({row, src, dst, view: true})
+          } else {
+            row = `+${tradeStat.mpDelta.toFixed(DELTA_PRECISION)}% better, ` + row
+            mpBetter.push({row, src, dst, view: true})
+          }
+        } else {
           /* same - can't compare equality on doubles, so threshold */
           mpSame.push({row, src, dst, view: true})
-        } else if (tradeStat.mpDelta > 0) {
-          row = `+${tradeStat.mpDelta.toFixed(6)}% better, ` + row
-          mpBetter.push({row, src, dst, view: true})
-        } else if (tradeStat.mpDelta < 0) {
-          row = `${tradeStat.mpDelta.toFixed(6)}% worse, ` + row
-          mpWorse.push({row, src, dst, view: true})
-        } else  {
-          log.error(`Failed to categorize trade for report, continuing:`, tradeStat)
-        }
+        } 
       }
     }
   }
 
-  content.push({row: `${mpBetter.length} Better Performing Multi-Path Routes`, type: 'sub-section', collapsible: (mpBetter.length > 0)})
+  content.push({row: `${mpBetter.length} - Multi-Path Routes Performed Better`, type: 'sub-section', collapsible: (mpBetter.length > 0)})
   mpBetter.forEach((row: any) => { content.push(row)})
 
-  content.push({row: `${mpWorse.length} Lower Performing Multi-Path Routes`, type: 'sub-section', collapsible: (mpWorse.length > 0)})
+  content.push({row: `${mpWorse.length} - Multi-Path Routes Performed Lower`, type: 'sub-section', collapsible: (mpWorse.length > 0)})
   mpWorse.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${mpSame.length} Same Performing Multi-Path Routes`, type: 'sub-section', collapsible: (mpSame.length > 0)})
+  content.push({row: `${mpSame.length} - Multi-Path Routes Performed Similarly`, type: 'sub-section', collapsible: (mpSame.length > 0)})
   mpSame.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${mpIncomparable.length} Incomparable Performance Multi-Path Routes`, type: 'sub-section', collapsible: (mpIncomparable.length > 0)})
+  content.push({row: `${mpIncomparable.length} - Multi-Path Routes Couldn't Be Compared`, type: 'sub-section', collapsible: (mpIncomparable.length > 0)})
   mpIncomparable.forEach((row: any) => { content.push(row)})
   
   // Exceptions Section:
@@ -718,19 +761,19 @@ const _createReport = (reportParameters: any,
   //////////////////////////////////////////////////////////////////////////////
   content.push({row: 'Exceptions Preventing Analysis', type: 'section'})
 
-  content.push({row: `${uniFail.length} Routes Uniswap V2 Could Not Find`, type: 'sub-section', collapsible: (uniFail.length > 0)})
+  content.push({row: `${uniFail.length} - Routes Uniswap V2 Did Not Find`, type: 'sub-section', collapsible: (uniFail.length > 0)})
   uniFail.forEach((row: any) => { content.push(row)})
 
-  content.push({row: `${spFail.length} Routes Valve Finance Could Not Find`, type: 'sub-section', collapsible: (spFail.length > 0)})
+  content.push({row: `${spFail.length} - Routes Valve Finance Did Not Find`, type: 'sub-section', collapsible: (spFail.length > 0)})
   spFail.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${spCriteriaFail.length} Routes That Did Not Fit The Specified Criteria`, type: 'sub-section', collapsible: (spCriteriaFail.length > 0)})
+  content.push({row: `${spCriteriaFail.length} - Routes Did Not Match Specified Criteria`, type: 'sub-section', collapsible: (spCriteriaFail.length > 0)})
   spCriteriaFail.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${mpCriteriaFail.length} Routes That Did Not Fit The Specified Multi-Path Criteria`, type: 'sub-section', collapsible: (mpCriteriaFail.length > 0)})
+  content.push({row: `${mpCriteriaFail.length} - Routes Did Not Match Specified Multi-Path Criteria`, type: 'sub-section', collapsible: (mpCriteriaFail.length > 0)})
   mpCriteriaFail.forEach((row: any) => { content.push(row)})
   
-  content.push({row: `${spUsdcConvFail.length} Routes That Could Not Be Evaluated From An Initial Amount In $USD`, type: 'sub-section', collapsible: (spUsdcConvFail.length > 0)})
+  content.push({row: `${spUsdcConvFail.length} - Routes Could'nt Be Evaluated From A $USD Initial Amount`, type: 'sub-section', collapsible: (spUsdcConvFail.length > 0)})
   spUsdcConvFail.forEach((row: any) => { content.push(row)})
 
   return reportPage
@@ -905,33 +948,9 @@ export const startSocketServer = async(port: string): Promise<void> => {
                     reportOptionsState: {
                       blockNumberOptions: _blockNumberOptions,
                       existingAnalysisOptions: _reportOptions,
-                      tokenSetOptions: [
-                        {
-                          key: 'TSO_0',
-                          text: 'Uniswap Default List',
-                          value: 'Uniswap Default List'
-                        },
-                        {
-                          key: 'TSO_1',
-                          text: 'Tokens in Pairs with $100M Liquidity',
-                          value: 'Tokens in Pairs with $100M Liquidity',
-                        },
-                        {
-                          key: 'TSO_2',
-                          text: 'Tokens in Pairs with $10M Liquidity',
-                          value: 'Tokens in Pairs with $10M Liquidity',
-                        },
-                        {
-                          key: 'TSO_3',
-                          text: 'Tokens in Pairs with $1M Liquidity',
-                          value: 'Tokens in Pairs with $1M Liquidity',
-                        },
-                        {
-                          key: 'TSO_4',
-                          text: 'Tokens in pairs that do not include WETH',
-                          value: 'Tokens in pairs that do not include WETH',
-                        }
-                      ],
+                      tokenSetOptions: Object.keys(TOKEN_SET_NAMES).map((key: string) => {
+                                         const value = TOKEN_SET_NAMES[key]
+                                         return { key, text: value, value } }),
                       proportioningAlgorithmOptions: [
                         {
                           key: 'PAO_0',
@@ -1054,41 +1073,40 @@ export const startSocketServer = async(port: string): Promise<void> => {
 
     
       // 0. Get the set of tokens that we're trading:
-      //    TODO - for now we'll just use the 100M case, but we need to expand this properly
+      //  IDEAS:
+      //   b) All tokens branching from a token in a pair with a token other than the 6 hub tokens:
+      //   e) Tokens in pairs between $75M and $100M liquidity
+      //   f) Tokens in pairs between $50M and $100M liquidity
+      //   g) Tokens in pairs between $25M and $50M liquidity
+      //   h) Tokens in pairs between $10M and $25M liquidity
       //
-      const _tokenSet: Set<string> = new Set<string>()
+      let _tokenSet = new Set<string>()
 
-      if (tokenSet !== 'Tokens in pairs that do not include WETH') {
-        const _minPairLiquidity = 100000000
-        for (const pairId of _uniData.pairData.getPairIds()) {
-          const pair = _uniData.pairData.getPair(pairId)
-          const usd = parseFloat(pair.reserveUSD)
-          if (usd > _minPairLiquidity) {
-            _tokenSet.add(pair.token0.id.toLowerCase())
-            _tokenSet.add(pair.token1.id.toLowerCase())
-          }
-        }
-        log.debug(`Found ${_tokenSet.size} tokens in pairs with > $${_minPairLiquidity} USD liquidity.\n` +
-                  `tokenSet: ${tokenSet}\n` +
-                  `================================================================================`)
-      } else {  /* non-weth pair set */
-        // Find all tokens that are in a pair with a token other than WETH:
-        //
-        for (const pairId of _uniData.pairData.getPairIds()) {
-          const pair = _uniData.pairData.getPair(pairId)
-          const usd = parseFloat(pair.reserveUSD)
-          const _minPairLiquidity = 5000000
-          if (usd > _minPairLiquidity) {
-            if (!c.WETH_ADDRS_LC.includes(pair.token0.id.toLowerCase()) &&
-                !c.WETH_ADDRS_LC.includes(pair.token1.id.toLowerCase())) {
-              _tokenSet.add(pair.token0.id.toLowerCase())
-              _tokenSet.add(pair.token1.id.toLowerCase())
-            }
-          }
-        }
-        log.debug(`Found ${_tokenSet.size} tokens not in pairs with WETH.\n` +
-                  `tokenSet: ${tokenSet}\n` +
-                  `================================================================================`)
+      switch (tokenSet) {
+        case TOKEN_SET_NAMES.NO_WETH_MIN_100M:
+          _tokenSet = getTokensInPairs(_uniData.pairData, [c.WETH_ADDR], 100000000)
+          break
+
+        case TOKEN_SET_NAMES.NO_WETH_MIN_50M:
+          _tokenSet = getTokensInPairs(_uniData.pairData, [c.WETH_ADDR], 50000000)
+          break
+
+        case TOKEN_SET_NAMES.NO_WETH_MIN_25M:
+          _tokenSet = getTokensInPairs(_uniData.pairData, [c.WETH_ADDR], 25000000)
+          break
+
+        case TOKEN_SET_NAMES.NO_HUB_MIN_50M:
+          _tokenSet = getTokensInPairs(_uniData.pairData, c.currentHubTokens, 50000000)
+          break
+
+        case TOKEN_SET_NAMES.NO_HUB_MIN_25M:
+          _tokenSet = getTokensInPairs(_uniData.pairData, c.currentHubTokens, 25000000)
+          break
+
+        case TOKEN_SET_NAMES.UNI_DEFAULT:
+        default:
+          c.uniswapDefaultTokens.forEach(tokenObj => _tokenSet.add(tokenObj.address.toLowerCase()))  
+          break
       }
 
 
@@ -1099,9 +1117,12 @@ export const startSocketServer = async(port: string): Promise<void> => {
       type Trade = {src: string, dst: string, randomValue: number}
       const trades: Trade[] = []
       for (const src of _tokenSet) {
-        for (const dst of _tokenSet) {
-          if (src !== dst) {
-            trades.push({src, dst, randomValue: Math.random()})
+        if (!c.tokensNoWethPair.includes(src)) {    // Ignore these tokens as source since we can't
+                                                    // convert the USD trade amount to them rn
+          for (const dst of _tokenSet) {
+            if (src !== dst) {
+              trades.push({src, dst, randomValue: Math.random()})
+            }
           }
         }
       }
