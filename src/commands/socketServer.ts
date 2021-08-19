@@ -1013,9 +1013,9 @@ export const startSocketServer = async(port: string): Promise<void> => {
     })
 
     socket.on('report-generate', async (reportParameters: any) => {
-      // Training Wheels:
-      let maxTrades = 100
-
+      let maxTrades = 3000
+      const reportStartMs = Date.now()
+      const computeTimes: number[] = []
 
       const requestId = _getRequestId()
       const reqType = 'report-generate'
@@ -1210,7 +1210,9 @@ export const startSocketServer = async(port: string): Promise<void> => {
         path.pop()
 
 
-        log.debug(`Trade computed in ${Date.now() - startMs} ms.`)
+        const tradeTime = Date.now() - startMs
+        computeTimes.push(tradeTime)
+        log.debug(`Trade computed in ${tradeTime} ms.`)
 
         tradeStats.push(new TradeStats(routeData))
       }
@@ -1247,6 +1249,19 @@ export const startSocketServer = async(port: string): Promise<void> => {
           existingAnalysisOptions: _reportOptions
         })
       }
+
+      computeTimes.sort((a: number, b: number) => a - b)
+      let sumComputeTime = computeTimes.reduce(
+        (previousValue: number, currentValue: number) => previousValue + currentValue,
+        0.0 /* initial value */)
+      let avgComputeTime = (computeTimes.length > 0) ? sumComputeTime / computeTimes.length : NaN
+      let minComputeTime = computeTimes[0]
+      let maxComputeTime = computeTimes[computeTimes.length-1]
+      log.debug (`Report generation completed in ${((Date.now() - reportStartMs)/(60*1000)).toFixed(2)} minutes.\n` +
+                 `Computed ${computeTimes.length} trades:\n` +
+                 `  average compute time = ${avgComputeTime} ms\n` +
+                 `  min compute time     = ${minComputeTime} ms\n` +
+                 `  max compute time     = ${maxComputeTime} ms\n`)
     })
 
     socket.on('report-fetch-route', async (routeParameters: any) => {
