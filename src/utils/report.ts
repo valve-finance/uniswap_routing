@@ -93,18 +93,18 @@ export const loadReportSummaries = async(): Promise<any> =>
 
 export const reportSummariesToOptions= (reportMetadata: any) => 
 {
-  const MAX_DESC_WIDTH = 64
+  const MAX_DESC_WIDTH = 100
   const existingAnalysisOptions: any = []
 
   for (const metadata of reportMetadata) {
     const { reportSubdir, params } = metadata
 
-    const reportIdText = `Report ID ${reportSubdir}`
-    const text = (params.analysisDescription) ?
-      (params.analysisDescription.length > MAX_DESC_WIDTH? 
-        `${params.analysisDescription.substr(0, MAX_DESC_WIDTH)} ...` :
-        params.analysisDescription) : 
-      reportIdText
+    let text = params.analysisDescription ?
+               params.analysisDescription :
+               `Trade $${params.tradeAmount} in ${params.tokenSet}.`
+    if (text.length > MAX_DESC_WIDTH) {
+      text = text.substr(0, MAX_DESC_WIDTH) + ' ...'
+    }
 
     const contentRows: any = [{
       formatting: 'title',
@@ -115,7 +115,7 @@ export const reportSummariesToOptions= (reportMetadata: any) =>
     contentRows.push({
       formatting: 'report_id',
       descriptor: '',
-      value: reportIdText
+      value: `Report ID ${reportSubdir}`
     })
 
     if (params.analysisDescription) {

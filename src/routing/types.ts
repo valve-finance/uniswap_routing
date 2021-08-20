@@ -15,7 +15,7 @@ export class RouteStats {
     this.uniError = ''
     this.vfiError = ''
     this.mpRoutesMeetingCriteria = 0
-    this.mpRoutesAfterRmDupLowerOrderPair = 0
+    this.mpRoutesAfterRmDuplicatePathPairs = 0
   }
 
   // public - b/c getter/setter laziness
@@ -25,7 +25,7 @@ export class RouteStats {
   public uniError: string
   public vfiError: string
   public mpRoutesMeetingCriteria: number
-  public mpRoutesAfterRmDupLowerOrderPair: number
+  public mpRoutesAfterRmDuplicatePathPairs: number
 }
 
 // A lighter weight version of RouteData to construct reports

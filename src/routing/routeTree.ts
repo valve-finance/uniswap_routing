@@ -5,6 +5,7 @@ import { computeTradeEstimates, getEstimatedUSD } from './quoting'
 
 import crawl from 'tree-crawl'
 import { v4 as uuidv4 } from 'uuid'
+import { routesToString } from './routeGraph'
 
 const log = ds.getLog('routeTree')
 
@@ -18,35 +19,40 @@ interface TradeObj {
   outputUsd?: string
 }
 
+// Represents all routes from source token to dest token as a tree.
+// Also allows hypothetical quotes for different amounts through all paths in the 'trades'
+// annotation object.
+//
 export interface TradeTreeNode {
   value: {
-    id: string,
-    address: string,
-    isUniRoute?: boolean,
-    symbol?: string,
-    amount?: string,
-    amountUSD?: string
-    pairId?: string,
-    impact?: string,
+    id: string,             // A unique identifier for rendering etc. (cytoscape / edges etc).
+    address: string,        // The token address (not unique within a Trade Tree).
+    isUniRoute?: boolean,   // Identifies if this token is on the official uniswap v2 route.
+    symbol?: string,        // The token symbol.
+    amount?: string,        // The amount of the token at this particular level in the trade for 100%
+                            // of funds going through this particular route.
+    amountUSD?: string      // The corresponding amount in USD.
+    pairId?: string,        // The pairID that gets from the parent node's token to this node.
+    impact?: string,        // The impact / slippage if 100% of funds go through this route.
     // Nested Objects:
     // ---------------
     // gainToDest?: {
     //   <routeId>: <gainToDest>,
     //   ...
     // }
-    gainToDest?: {
-      [index: string]: number 
-    }
+    gainToDest?: {                // The gain to destination, (1-slippageN)*(1-slippageM) ..., for
+      [index: string]: number     // a particular route laid atop this tree structure (the route is
+    }                             // denoted by the index).
     //
     // trades?: {
     //   <tradeId>: <tradeObj> 
     // }
-    trades?: {
-      [index: string]: TradeObj
+    trades?: {                    // The trade object for a particular proportion of the trade amount
+      [index: string]: TradeObj   // at this point in a multi-path trade.
     } 
   },
-  parent?: TradeTreeNode,
-  children: TradeTreeNode[]
+  parent?: TradeTreeNode,         // The parent node and source token to this token across the pair
+  children: TradeTreeNode[]       // The destination token nodes to this node as the source token
 }
 
 interface TradeProportion {
@@ -258,13 +264,9 @@ const _cloneTradeTree = (node: TradeTreeNode, clone: TradeTreeNode, exact: boole
   }
 }
 
-export const cloneTradeTree = (root: TradeTreeNode | undefined, 
-                               exact: boolean = false): TradeTreeNode | undefined =>
+export const cloneTradeTree = (root: TradeTreeNode, 
+                               exact: boolean = false): TradeTreeNode =>
 {
-  if (!root) {
-    return undefined
-  }
-
   const rootClone: TradeTreeNode = _cloneTradeTreeNode(root, exact)
   _cloneTradeTree(root, rootClone, exact)
   return rootClone 
@@ -586,4 +588,158 @@ export const annotateTradeTreeWithUSD = async (allPairData: t.Pairs,
           }
         },
         { order: 'bfs' })
+}
+
+export const getNumRoutes = (rootNode: TradeTreeNode): number => 
+{
+  const routeIds = new Set<string>()
+
+  // The number or routes is stored in the node's gainToDest object. 
+  // The root node doesn't have the gainToDest object defined--have to 
+  // count routeIds in ALL direct children.
+  //
+  const totalRouteGTDs: any = {}
+  rootNode.children.forEach((child: TradeTreeNode) => {
+    if (child.value.gainToDest) {
+      for (const routeId in child.value.gainToDest) {
+        routeIds.add(routeId)
+      }
+    }
+  })
+
+  return routeIds.size
+}
+
+/**
+ *  pruneRoutesWithDuplicatePairs:
+ *      Walks the tree finding nodes containing a re-used pair (by pairID) to
+ *      identify routes to be removed to facilitate estimation accuracy and / or
+ *      reduce slippage in a multi-path trade.
+ * 
+ *      Different use cases include:
+ *        UC1:  duplicated pair at tree nodes at different level in the tree
+ *        UC2:  duplicated pair at tree nodes at same level in the tree
+ * 
+ *      Considerations include duplicated pair slippage (lower improves estimation
+ *      accuracy and may not require removal of a route).  The routes to remove
+ *      should be prioritized by gain to destination.
+ * 
+ * @param rootNode 
+ */
+export const pruneRoutesWithDuplicatePairs = (rootNode: TradeTreeNode): TradeTreeNode =>
+{
+  const MAX_ALLOWED_SLIPPAGE = 1.0  // Increasing this hurts estimate accuracy.
+
+  const clonedRootNode = cloneTradeTree(rootNode)
+
+  // totalRouteGTDs:
+  // ----------------------------------------
+  //  Maps route# (routeId) to total gain to destination. Aids in deciding which
+  //  routes to cut duplicate pairs from.  (The root node doesn't have the gainToDest
+  //  object defined--have to get it directly from it's children.)
+  //
+  const totalRouteGTDs: any = {}
+  clonedRootNode.children.forEach((child: TradeTreeNode) => {
+    if (child.value.gainToDest) {
+      for (const routeId in child.value.gainToDest) {
+        totalRouteGTDs[routeId] = child.value.gainToDest[routeId]
+      }
+    }
+  })
+
+  // pairNodeInfoMap:
+  // ----------------------------------------
+  //  Maps pairId to an array of routeIds that use it at the same node. For example
+  //  if routes 1, 2 & 5 use pairIdX at a node and route 4 uses pairIdX at a different
+  //  node (at a lower tree level or the same one but on a different branch), then
+  //  pairs would look like this:
+  //
+  //  pairNodeInfoMap: {
+  //    pairIdX: [ 
+  //      { maxGTD: <number>, maxSlippage: <number>, routeIds: ['1', '2', '5'] }, level: <number>,
+  //      { maxGTD: <number>, maxSlippage: <number>, routeIds: ['4'], level: <number> }
+  //  }
+  //
+  //  The prune algorithm would then use the total gain to destination of route 4 vs.
+  //  the max gain to destination of routes 1, 2 & 5 to determine which route(s) to prune.
+  //  If route 4 has higher GTD then routes 1, 2 & 5 are pruned.
+  //
+  //    NOTE(TODO): this may not be the right choice--i.e. if the GTDs are close, you might
+  //                reduce slippage more by keeping 1, 2 & 5 instead of route 4 and taking
+  //                advantage of splitting the amounts downstream to reduce a high slippage
+  //                there.  < TODO TODO TODO >
+  //
+  const pairNodeInfoMap: any = {}
+
+  crawl(clonedRootNode,
+        (node, context) => {
+          const { pairId, impact, gainToDest } = node.value
+          if (pairId && gainToDest) {
+            if (!pairNodeInfoMap[pairId]) {
+              pairNodeInfoMap[pairId] = []
+            }
+
+            const routeIdsAtThisNode = Object.keys(gainToDest)
+            let maxGTD = 0
+            for (const routeId of routeIdsAtThisNode) {
+              if (totalRouteGTDs[routeId] > maxGTD) {
+                maxGTD = totalRouteGTDs[routeId]
+              }
+            }
+            pairNodeInfoMap[pairId].push({ maxGTD,
+                                        maxSlippage: impact, 
+                                        routeIds: routeIdsAtThisNode,
+                                        level: context.level})
+          }
+        },
+        { order: 'bfs' })
+  
+  // TODO TODO TODO: Area for potential route optimization. This is a first guess
+  //                 to optimize and improve estimation.  This wouldn't be needed
+  //                 if our model handled pair slippage multiple times in a trade
+  //                 quote.
+  //
+  // 1. Sort the pairNodeInfoMap entries by maxGTD ascending:
+  //
+  // 2. Populate a list of routes that must be pruned by keeping the highest GTD ones:
+  //    (TODO: a lot of optimization is possible here--there may be directions we
+  //           take in this simple algorithm that are sub-optimal. For instance
+  //           when maxGTD for competing nodes are very close and/or we make a 
+  //           decision to prune too many routes.)
+  //
+  const pruneRoutes = new Set<string>()
+  for (const pairId in pairNodeInfoMap) {
+    const pairNodeInfo = pairNodeInfoMap[pairId]
+    if (pairNodeInfo.length <= 1) {
+      continue
+    }
+
+    pairNodeInfo.sort((pairInfoA: any, pairInfoB: any) => {
+      return pairInfoA.maxGTD - pairInfoB.maxGTD    // Ascending order
+    })
+
+    // Keep the last pairInfo out of this (it's the max GTD and shouldn't be pruned.)
+    for (let pairInfoIdx = 0; pairInfoIdx < pairNodeInfo.length-1; pairInfoIdx++) {
+      const pairInfo = pairNodeInfo[pairInfoIdx]
+      const { maxSlippage, routeIds } = pairInfo
+
+      if (maxSlippage > MAX_ALLOWED_SLIPPAGE) {
+        for (const routeId of routeIds) {
+          pruneRoutes.add(routeId)
+        }
+      }
+    }
+  }
+
+  // log.debug(`pairNodeInfoMap\n` +
+  //           '--------------------------------------------------------------------------------\n' +
+  //           JSON.stringify(pairNodeInfoMap, null, 2) + '\n\n' +
+  //           `pruneRoutes\n` +
+  //           '--------------------------------------------------------------------------------\n' +
+  //           JSON.stringify([...pruneRoutes], null, 2))
+
+  for (const routeId of pruneRoutes) {
+    pruneTreeRoute(clonedRootNode, routeId)
+  }
+  return clonedRootNode
 }

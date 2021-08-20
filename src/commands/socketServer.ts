@@ -333,30 +333,40 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
     uniYield.usd = lastUniSeg.dstUSD ? parseFloat(lastUniSeg.dstUSD) : 0.0
     uniYield.token = lastUniSeg.dstAmount ? parseFloat(lastUniSeg.dstAmount) : 0.0
   }
+  // log.debug(`Routes:\n` +
+  //           `================================================================================`)
+  // log.debug(routes)
 
   // 2. Perform filtering and pruning of the single path routes
   //
-  const prunedRoutes = rg.pruneRoutes(routes, {maxRoutes: 10, minGainToDest: 0.05})
-  routeStats.mpRoutesMeetingCriteria = prunedRoutes.length
-
-  // TODO: removeRoutesWithLowerOrderPairs algorithm needs attention, it's done hastily and
-  //       is sub-optimal (i.e. might remove the best route if the shared pair occurs later
-  //       in the tree order/level):
-  const filteredRoutes = rg.removeRoutesWithLowerOrderPairs(prunedRoutes, _options)
-  routeStats.mpRoutesAfterRmDupLowerOrderPair = filteredRoutes.length
-
-  const filteredRoutesTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(filteredRoutes)
+  const orderedRoutes = rg.pruneRoutes(routes, {maxRoutes: 10, minGainToDest: 0.05})
+  routeStats.mpRoutesMeetingCriteria = orderedRoutes.length
   let valveOnePathYield: TradeYieldData = {
     usd: 0.0,
     token: 0.0
   }
-  if (filteredRoutes && filteredRoutes.length && filteredRoutes[0] && filteredRoutes[0].length) {
-    const bestRoute = filteredRoutes[0]
+  if (orderedRoutes && orderedRoutes.length && orderedRoutes[0] && orderedRoutes[0].length) {
+    const bestRoute = orderedRoutes[0]
     const lastSeg = bestRoute[bestRoute.length - 1]
     valveOnePathYield.usd = lastSeg.dstUSD ? parseFloat(lastSeg.dstUSD) : 0.0
     valveOnePathYield.token = lastSeg.dstAmount ? parseFloat(lastSeg.dstAmount) : 0.0
   }
 
+  // log.debug(`Ordered Routes:\n` +
+  //           `================================================================================`)
+  // log.debug(orderedRoutes)
+
+  // 2.5 Pre-work for constructing a multi-path route. Build a trade tree from the routes
+  //     found in the single path router and examine the tree for duplicate pairs exceeding
+  //     a low slippage--these pairs will destroy estimation and their routes should be pruned
+  //     to maximize gain (while minimizing estimation error).
+  //
+  const spRoutesTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(orderedRoutes)
+  let prunedTradeTee: rt.TradeTreeNode | undefined = undefined
+  if (spRoutesTree) {
+    prunedTradeTee = rt.pruneRoutesWithDuplicatePairs(spRoutesTree)
+    routeStats.mpRoutesAfterRmDuplicatePathPairs = rt.getNumRoutes(prunedTradeTee)
+  }
 
   // 3. Construct a multi-path route:
   //
@@ -364,7 +374,7 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
     usd: 0.0,
     token: 0.0
   }
-  const costedMultirouteTree = filteredRoutesTree
+  const costedMultirouteTree = prunedTradeTee
   if (costedMultirouteTree) {
     await rt.costTradeTree(_uniData.pairData,
                            _uniData.tokenData,
@@ -546,11 +556,11 @@ const _routeDataToPages = (routeData: RouteData): any =>
     }
     description.push({text: comparisonStr, textStyle: 'bold'})
     
-    const { routesFound, mpRoutesMeetingCriteria, mpRoutesAfterRmDupLowerOrderPair } = routeData.getRouteStats()
+    const { routesFound, mpRoutesMeetingCriteria, mpRoutesAfterRmDuplicatePathPairs } = routeData.getRouteStats()
     let routeStatsStr: string = ''
     routeStatsStr += (routesFound !== undefined) ? `${routesFound} routes found.` : ''
     routeStatsStr += (mpRoutesMeetingCriteria !== undefined) ? ` ${mpRoutesMeetingCriteria} match criteria supplied.` : ''
-    routeStatsStr += (mpRoutesAfterRmDupLowerOrderPair !== undefined) ? ` ${mpRoutesAfterRmDupLowerOrderPair} after removing dup. lower order pairs.` : ''
+    routeStatsStr += (mpRoutesAfterRmDuplicatePathPairs !== undefined) ? ` ${mpRoutesAfterRmDuplicatePathPairs} after removing dup. lower order pairs.` : ''
     description.push({text: routeStatsStr})
 
     pages.push({
@@ -719,9 +729,8 @@ const _createReport = (reportParameters: any,
         const numTokensInStr = (isNaN(tradeStat.inputAmount)) ? '' : tradeStat.inputAmount.toFixed(6)
         const numTokensOutStr = (tradeStat.mpYield && tradeStat.mpYield.token) ?
           tradeStat.mpYield.token.toFixed(6) : ''
-        if (numTokensInStr && numTokensOutStr) {
-          row = `${numTokensInStr} ${srcSymbol} --> ${numTokensOutStr} ${dstSymbol}`
-        }
+        row += (numTokensInStr && numTokensOutStr) ?
+            `, (${numTokensInStr} --> ${numTokensOutStr})` : ''
 
         const { mpDelta } = tradeStat
         if (isNaN(mpDelta)) {
