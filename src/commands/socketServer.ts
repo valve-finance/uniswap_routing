@@ -361,11 +361,13 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
   //     a low slippage--these pairs will destroy estimation and their routes should be pruned
   //     to maximize gain (while minimizing estimation error).
   //
-  const spRoutesTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(orderedRoutes)
-  let prunedTradeTee: rt.TradeTreeNode | undefined = undefined
-  if (spRoutesTree) {
-    prunedTradeTee = rt.pruneRoutesWithDuplicatePairs(spRoutesTree)
-    routeStats.mpRoutesAfterRmDuplicatePathPairs = rt.getNumRoutes(prunedTradeTee)
+  const mpRouteTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(orderedRoutes)
+  if (mpRouteTree) {
+    // Prune all routes if high MGTD detected
+    rt.pruneRoutesIfHighTopLevelMGTD(mpRouteTree)
+
+    rt.pruneRoutesWithDuplicatePairs(mpRouteTree)
+    routeStats.mpRoutesAfterRmDuplicatePathPairs = rt.getNumRoutes(mpRouteTree)
   }
 
   // 3. Construct a multi-path route:
@@ -374,25 +376,24 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
     usd: 0.0,
     token: 0.0
   }
-  const costedMultirouteTree = prunedTradeTee
-  if (costedMultirouteTree) {
+  if (mpRouteTree) {
     await rt.costTradeTree(_uniData.pairData,
                            _uniData.tokenData,
                            amount,
-                           costedMultirouteTree,
+                           mpRouteTree,
                            false /* update pair data <-- TODO: tie to property */)
 
     if (_uniData.wethPairData) {
       await rt.annotateTradeTreeWithUSD(_uniData.pairData,
                                         _uniData.wethPairData,
-                                        costedMultirouteTree,
+                                        mpRouteTree,
                                         false /* update pair data */)
     }
 
     // Calculate the net result of the multi-route trade by summing
     // all the leaf nodes:
     //
-    crawl(costedMultirouteTree,
+    crawl(mpRouteTree,
           (node, context) => {
             if (node.children.length === 0 && node.value.trades) {
               // Multiple trades not yet supported, just use first property for now:
@@ -423,8 +424,8 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
     routeData.setSinglePathValveYield(valveOnePathYield)
   }
 
-  if (costedMultirouteTree) {
-    routeData.setMultiPathElementsFromTree(costedMultirouteTree)
+  if (mpRouteTree) {
+    routeData.setMultiPathElementsFromTree(mpRouteTree)
     routeData.setMultiPathValveYield(valveMultiPathYield)
   }
 
@@ -683,7 +684,7 @@ const _createReport = (reportParameters: any,
   spBetter.forEach((row: any) => { content.push(row)})
 
   content.push({row: `${spWorse.length} - Single Path Routes Performed Lower`, type: 'sub-section', collapsible: (spWorse.length > 0)})
-  spWorse.forEach((row: any) => { content.push(row)})
+  spWorse.slice().reverse().forEach((row: any) => { content.push(row)})
   
   content.push({row: `${spSame.length} - Single Path Routes Performed Similarly`, type: 'sub-section', collapsible: (spSame.length > 0)})
   spSame.forEach((row: any) => { content.push(row)})
@@ -757,7 +758,7 @@ const _createReport = (reportParameters: any,
   mpBetter.forEach((row: any) => { content.push(row)})
 
   content.push({row: `${mpWorse.length} - Multi-Path Routes Performed Lower`, type: 'sub-section', collapsible: (mpWorse.length > 0)})
-  mpWorse.forEach((row: any) => { content.push(row)})
+  mpWorse.slice().reverse().forEach((row: any) => { content.push(row)})
   
   content.push({row: `${mpSame.length} - Multi-Path Routes Performed Similarly`, type: 'sub-section', collapsible: (mpSame.length > 0)})
   mpSame.forEach((row: any) => { content.push(row)})

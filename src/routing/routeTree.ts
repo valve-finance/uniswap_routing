@@ -315,6 +315,9 @@ const _getTradeProportions = (startNode: TradeTreeNode): TradeProportions => {
       })
     }
 
+    // TODO TODO TODO: unityGainIndex code doesn't work--will fail with 
+    // insufficientInputAmountError: (need to prune tree)
+
     // Check for special case where maxGainToDest exceeds 1.0 and route entirely
     // to this path:
     //
@@ -626,11 +629,9 @@ export const getNumRoutes = (rootNode: TradeTreeNode): number =>
  * 
  * @param rootNode 
  */
-export const pruneRoutesWithDuplicatePairs = (rootNode: TradeTreeNode): TradeTreeNode =>
+export const pruneRoutesWithDuplicatePairs = (rootNode: TradeTreeNode) =>
 {
   const MAX_ALLOWED_SLIPPAGE = 1.0  // Increasing this hurts estimate accuracy.
-
-  const clonedRootNode = cloneTradeTree(rootNode)
 
   // totalRouteGTDs:
   // ----------------------------------------
@@ -639,7 +640,7 @@ export const pruneRoutesWithDuplicatePairs = (rootNode: TradeTreeNode): TradeTre
   //  object defined--have to get it directly from it's children.)
   //
   const totalRouteGTDs: any = {}
-  clonedRootNode.children.forEach((child: TradeTreeNode) => {
+  rootNode.children.forEach((child: TradeTreeNode) => {
     if (child.value.gainToDest) {
       for (const routeId in child.value.gainToDest) {
         totalRouteGTDs[routeId] = child.value.gainToDest[routeId]
@@ -671,7 +672,7 @@ export const pruneRoutesWithDuplicatePairs = (rootNode: TradeTreeNode): TradeTre
   //
   const pairNodeInfoMap: any = {}
 
-  crawl(clonedRootNode,
+  crawl(rootNode,
         (node, context) => {
           const { pairId, impact, gainToDest } = node.value
           if (pairId && gainToDest) {
@@ -739,7 +740,45 @@ export const pruneRoutesWithDuplicatePairs = (rootNode: TradeTreeNode): TradeTre
   //           JSON.stringify([...pruneRoutes], null, 2))
 
   for (const routeId of pruneRoutes) {
-    pruneTreeRoute(clonedRootNode, routeId)
+    pruneTreeRoute(rootNode, routeId)
   }
-  return clonedRootNode
+  return rootNode
+}
+
+export const pruneRoutesIfHighTopLevelMGTD = (rootNode: TradeTreeNode) => {
+  const HIGH_MGTD = 0.99
+
+  // totalRouteGTDs:
+  // ----------------------------------------
+  //  Maps route# (routeId) to total gain to destination. Aids in deciding which
+  //  routes to cut duplicate pairs from.  (The root node doesn't have the gainToDest
+  //  object defined--have to get it directly from it's children.)
+  //
+  const totalRouteGTDs: any = {}
+  rootNode.children.forEach((child: TradeTreeNode) => {
+    if (child.value.gainToDest) {
+      for (const routeId in child.value.gainToDest) {
+        totalRouteGTDs[routeId] = child.value.gainToDest[routeId]
+      }
+    }
+  })
+
+  const routeIds = Object.keys(totalRouteGTDs)
+  let maxGTD = 0
+  let maxRouteId = ''
+  for (const routeId of routeIds) {
+    if (totalRouteGTDs[routeId] > maxGTD) {
+      maxGTD = totalRouteGTDs[routeId]
+      maxRouteId = routeId
+    }
+  }
+
+  if (maxGTD > HIGH_MGTD) {
+    // Prune all routes but the maxRouteId
+    const pruneRoutes = routeIds.filter(value => value !== maxRouteId)
+    // log.debug(`Pruning: ${JSON.stringify(pruneRoutes, null , 2)}`)
+    for (const routeId of pruneRoutes) {
+      pruneTreeRoute(rootNode, routeId)
+    }
+  }
 }
