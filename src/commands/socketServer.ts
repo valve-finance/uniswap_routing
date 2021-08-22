@@ -286,6 +286,15 @@ const _processRouteReq = async(uniData: t.UniData,
   })
   _routeStats.routesMeetingCriteria = _quotedRoutes.length
 
+  /**
+   * Tag the best sp route as the valve fi route (this is the first route from sorting
+   * above.)
+   */
+  if (_quotedRoutes.length > 0) {
+    const bestSpRoute = _quotedRoutes[0]
+    bestSpRoute.forEach((_seg: t.VFSegment) => _seg.isBest = true)
+  }
+
   const _requestedQuotedRoutes: t.VFRoutes = _quotedRoutes.slice(0, options.max_results.value)
   if (uniData.wethPairData) {
     await rg.annotateRoutesWithUSD(uniData.pairData,
@@ -556,12 +565,12 @@ const _routeDataToPages = (routeData: RouteData): any =>
       } else if (!isNaN(difference)) {
         comparisonStr += ` (${difference.toFixed(6)} tokens)`
       }
-      if (delta > 0) {
-        comparisonStr += ', more than Uniswap V2.'
-      } else if (delta < 0) {
-        comparisonStr += ', less than Uniswap V2.'
-      } else {
+      if (Math.abs(delta) < DELTA_ZERO_THRESHOLD) {
         comparisonStr += ', same as Uniswap V2.'
+      } else if (delta > 0) {
+        comparisonStr += ', more than Uniswap V2.'
+      } else { // (delta < 0)
+        comparisonStr += ', less than Uniswap V2.'
       }
     }
     description.push({text: comparisonStr, textStyle: 'bold'})
@@ -598,6 +607,7 @@ const _createReport = (reportParameters: any,
   const reportPage: any = {
     title: 'Report Summary',
     description: [ {text: reportParameters.analysisDescription},
+                   {text: `Block #${reportParameters.blockNumber}, Report ID ${paramsHash}`},
                    {text: `${tradeStats.length} trades between tokens analyzed.`},
                    {text: `Note: Performance compared to ${DELTA_PRECISION} decimal places of a percent.`} ],
     content: [],
@@ -1041,6 +1051,7 @@ export const startSocketServer = async(port: string): Promise<void> => {
 
       const {
         analysisDescription,
+        blockNumber,
         tokenSet,
         tradeAmount,
         proportioningAlgorithm,

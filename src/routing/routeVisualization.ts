@@ -15,6 +15,12 @@ export const PATH_COLORS: { [index: string]: string } = {
   UNI_EDGE: 'LightBlue'               // $ADD8E6
 }
 
+// See: https://js.cytoscape.org/#style/node-body
+export const NODE_SHAPES: { [index: string]: string } = {
+  DEFAULT: 'ellipse',
+  VALVE_SP: 'star'
+}
+
 /**
  * getCytoscapeGraph: Constructs a Cytoscape representation of a TradeTree (n-ary Tree
  *                    representing possible pathways from a source token to a
@@ -47,6 +53,8 @@ export const getCytoscapeGraph = (tradeTree: TradeTreeNode,
             let amountUSD = node.value.amountUSD
             let nodeColor = node.value.isUniRoute ?
                             PATH_COLORS.UNI_NODE : PATH_COLORS.DEFAULT_NODE
+            let nodeShape = node.value.isBest ?
+                            NODE_SHAPES.VALVE_SP : NODE_SHAPES.DEFAULT
             if (isMultiPath) {
               let trade: any = undefined
               // Get first trade
@@ -67,7 +75,8 @@ export const getCytoscapeGraph = (tradeTree: TradeTreeNode,
               amountUSD,
               symbol: node.value.symbol,
               label: '',
-              color: nodeColor
+              color: nodeColor,
+              shape: nodeShape
             }
             cy.add({ group: 'nodes', data: nodeData})
 

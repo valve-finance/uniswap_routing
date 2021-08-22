@@ -219,6 +219,7 @@ export interface VFSegment {
   gainToDest?: number
   yieldToDest?: number
   isUni?: boolean
+  isBest?: boolean
 }
 export type VFRoute = VFSegment[]
 export type VFRoutes = VFRoute[]

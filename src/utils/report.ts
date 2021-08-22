@@ -113,9 +113,9 @@ export const reportSummariesToOptions= (reportMetadata: any) =>
     }]
 
     contentRows.push({
-      formatting: 'report_id',
+      formatting: 'sub-title',
       descriptor: '',
-      value: `Report ID ${reportSubdir}`
+      value: `Block #${params.blockNumber}, Report ID ${reportSubdir}`
     })
 
     if (params.analysisDescription) {

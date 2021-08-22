@@ -28,6 +28,7 @@ export interface TradeTreeNode {
     id: string,             // A unique identifier for rendering etc. (cytoscape / edges etc).
     address: string,        // The token address (not unique within a Trade Tree).
     isUniRoute?: boolean,   // Identifies if this token is on the official uniswap v2 route.
+    isBest?: boolean,       // Identifies if this token is on the best single path route
     symbol?: string,        // The token symbol.
     amount?: string,        // The amount of the token at this particular level in the trade for 100%
                             // of funds going through this particular route.
@@ -154,7 +155,8 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
             symbol: seg.srcSymbol,
             amount: seg.srcAmount,
             amountUSD: seg.srcUSD,
-            isUniRoute: seg.isUni
+            isUniRoute: seg.isUni,
+            isBest: seg.isBest
           },
           children: []
         }
@@ -174,6 +176,9 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
           //
           if (seg.isUni) {
             node.value.isUniRoute = true
+          }
+          if (seg.isBest) {
+            node.value.isBest = true
           }
         }
       }
@@ -195,7 +200,8 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
             pairId: seg.pairId,
             impact: seg.impact,
             gainToDest: {},
-            isUniRoute: seg.isUni
+            isUniRoute: seg.isUni,
+            isBest: seg.isBest
           },
           parent: node,
           children: []
@@ -208,6 +214,9 @@ export const buildTradeTree = (routes: t.VFRoutes): TradeTreeNode | undefined =>
         //
         if (seg.isUni) {
           dstNode.value.isUniRoute = true
+        }
+        if (seg.isBest) {
+          dstNode.value.isBest = true
         }
       }
       if (dstNode.value.gainToDest !== undefined) {
@@ -236,7 +245,8 @@ const _cloneTradeTreeNode = (node: TradeTreeNode, exact: boolean): TradeTreeNode
     value: {
       id: exact ? node.value.id : uuidv4(),
       address: node.value.address,
-      isUniRoute: node.value.isUniRoute
+      isUniRoute: node.value.isUniRoute,
+      isBest: node.value.isBest
     },
     children: [],
   }
