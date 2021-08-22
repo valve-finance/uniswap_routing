@@ -99,9 +99,11 @@ export const reportSummariesToOptions= (reportMetadata: any) =>
   for (const metadata of reportMetadata) {
     const { reportSubdir, params } = metadata
 
+    const fmtdAmt = new Intl.NumberFormat('us-US', 
+                                          { style: 'currency', currency: 'USD' }).format(params.tradeAmount)
     let text = params.analysisDescription ?
                params.analysisDescription :
-               `Trade $${params.tradeAmount} in ${params.tokenSet}.`
+               `Trade ${fmtdAmt} in ${params.tokenSet}.`
     if (text.length > MAX_DESC_WIDTH) {
       text = text.substr(0, MAX_DESC_WIDTH) + ' ...'
     }
