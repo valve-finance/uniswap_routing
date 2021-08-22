@@ -782,3 +782,59 @@ export const pruneRoutesIfHighTopLevelMGTD = (rootNode: TradeTreeNode) => {
     }
   }
 }
+
+/**
+ * pruneRoutesIfHighMGTD: Starting at the top of the tree, we identify high MGTD routes
+ *                        and then add the other routes in that same node to a prune list,
+ *                        pruning them at the end.
+ *                        This works w/o considering above nodes etc. b/c if there are 
+ *                        multiple trades in a node then up until that point, the other trades
+ *                        in the node beyond the MGTD one have the same route/segments and thus
+ *                        cannot outperform the high MGTD one and should be pruned.
+ * 
+ * @param rootNode 
+ */
+export const pruneRoutesIfHighMGTD = (rootNode: TradeTreeNode) => {
+  const HIGH_MGTD = 0.98
+
+  const pruningSet = new Set<string>()
+  crawl(rootNode,
+        (node, context) => {
+          const possibleRouteIds: string[] = []
+
+          // Figure out the maximum gtd amongst the routes through this node:
+          //
+          let maxRouteId: string = ''
+          let maxRouteGTD = 0
+          for (const child of node.children) {
+            const { gainToDest } = child.value
+            if (gainToDest) {
+              for (const routeId in gainToDest) {
+                possibleRouteIds.push(routeId)
+                const routeGTD = gainToDest[routeId]
+                if (routeGTD > maxRouteGTD) {
+                  maxRouteGTD = routeGTD
+                  maxRouteId = routeId
+                }
+              }
+            }
+          }
+
+          // If the maximum gtd exceeds HIGH_MGTD, then prune the other routes at this node.
+          //
+          if (maxRouteGTD > HIGH_MGTD) {
+            log.debug(`Route ${maxRouteId} at level ${context.level} exceeds high MGTD (gtd=${maxRouteGTD}).`)
+            possibleRouteIds.forEach(routeId => { 
+              if (routeId !== maxRouteId ) {
+                pruningSet.add(routeId) 
+              }
+            })
+          }
+        },
+        { order: 'bfs' })
+  
+  log.debug(`Pruning ${pruningSet.size} routes due to high MGTD.\n`)
+  for (const routeId of pruningSet) {
+    pruneTreeRoute(rootNode, routeId)
+  }
+}

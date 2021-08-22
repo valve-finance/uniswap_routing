@@ -313,6 +313,7 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
                                                         amount,
                                                         _options)
   rg.annotateRoutesWithGainToDest(routes)
+  rg.annotateRoutesWithYieldToDest(routes)
   rg.annotateRoutesWithSymbols(_uniData.tokenData, routes)
   const routesTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(routes)
 
@@ -337,34 +338,42 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
   //           `================================================================================`)
   // log.debug(routes)
 
-  // 2. Perform filtering and pruning of the single path routes
+  // 2. Add the best single path route as the Valve Fi Route
   //
-  const orderedRoutes = rg.pruneRoutes(routes, {maxRoutes: 10, minGainToDest: 0.05})
-  routeStats.mpRoutesMeetingCriteria = orderedRoutes.length
   let valveOnePathYield: TradeYieldData = {
     usd: 0.0,
     token: 0.0
   }
-  if (orderedRoutes && orderedRoutes.length && orderedRoutes[0] && orderedRoutes[0].length) {
-    const bestRoute = orderedRoutes[0]
+  if (routes && routes.length && routes[0] && routes[0].length) {
+    const bestRoute = routes[0]
     const lastSeg = bestRoute[bestRoute.length - 1]
     valveOnePathYield.usd = lastSeg.dstUSD ? parseFloat(lastSeg.dstUSD) : 0.0
     valveOnePathYield.token = lastSeg.dstAmount ? parseFloat(lastSeg.dstAmount) : 0.0
   }
 
+  // 2.3 Pre-work filtering and pruning of the single path routes for multi-path routing:
+  //
+  const maximumConcurrentPaths = 10
+  const maximumRouteSlippage = 100.0
+  const minGainToDest = 100.0 - maximumRouteSlippage
+  const prunedRoutes = rg.pruneRoutes(routes, {maxRoutes: maximumConcurrentPaths, 
+                                                minGainToDest})
+  routeStats.mpRoutesMeetingCriteria = routes.length
+
   // log.debug(`Ordered Routes:\n` +
   //           `================================================================================`)
-  // log.debug(orderedRoutes)
+  // log.debug(prunedRoutes)
 
   // 2.5 Pre-work for constructing a multi-path route. Build a trade tree from the routes
   //     found in the single path router and examine the tree for duplicate pairs exceeding
   //     a low slippage--these pairs will destroy estimation and their routes should be pruned
   //     to maximize gain (while minimizing estimation error).
   //
-  const mpRouteTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(orderedRoutes)
+  const mpRouteTree: rt.TradeTreeNode | undefined = rt.buildTradeTree(prunedRoutes)
   if (mpRouteTree) {
     // Prune all routes if high MGTD detected
-    rt.pruneRoutesIfHighTopLevelMGTD(mpRouteTree)
+    // rt.pruneRoutesIfHighTopLevelMGTD(mpRouteTree)
+    rt.pruneRoutesIfHighMGTD(mpRouteTree)
 
     rt.pruneRoutesWithDuplicatePairs(mpRouteTree)
     routeStats.mpRoutesAfterRmDuplicatePathPairs = rt.getNumRoutes(mpRouteTree)

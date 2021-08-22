@@ -3,6 +3,7 @@ import * as t from '../utils/types'
 import { WETH_ADDR, USDC_ADDR, WETH_ADDRS_LC } from '../utils/constants'
 import { getUpdatedPairData } from '../graphProtocol/uniswapV2'
 import { filterToPairIdsOfAge, getEstimatedUSD } from './quoting'
+import { stringify } from 'uuid'
 
 const log = ds.getLog('routeGraph')
 
@@ -292,6 +293,28 @@ export const annotateRoutesWithGainToDest = (routes: t.VFRoutes): void => {
   }
 }
 
+export const annotateRoutesWithYieldToDest = (routes: t.VFRoutes): void => {
+  /**
+   * Yield to destination is the ratio of input tokens of the current segment
+   * to the whole route's destination tokens.
+   * 
+   * This is useful when factoring in price differences (i.e. a price / exchange might
+   * be totally skewed yet slippage might be low, this allows comparison of price data)
+   * 
+   */
+  for (const route of routes) {
+    let finalDestTokens: number = 0
+    for (let segIdx = route.length - 1; segIdx >= 0; segIdx--) {
+      const seg: t.VFSegment = route[segIdx]
+      if (segIdx === route.length - 1) {
+        finalDestTokens = (seg.dstAmount) ? parseFloat(seg.dstAmount) : 0.0
+      }
+      const srcTokens = (seg.srcAmount) ? parseFloat(seg.srcAmount) : 0.0
+      seg.yieldToDest = (isNaN(srcTokens)) ? NaN : finalDestTokens / srcTokens
+    }
+  }
+}
+
 /**
  * pruneRoutes removes any routes that are below the specified minimum gain to
  * destination. This is done by examining the 1st segment of each route's gain to
@@ -305,12 +328,59 @@ export const annotateRoutesWithGainToDest = (routes: t.VFRoutes): void => {
  */
 export const pruneRoutes = (routes: t.VFRoutes, options?: any): t.VFRoutes =>
 {
-  const _options: any = { maxRoutes: 10, minGainToDest: 0.05, ...options }
+  const _options: any = { maxRoutes: 25, minGainToDest: 0.0, ...options }
+
+  // 1. Compute the maximum yield to destination of all the routes to
+  //    normalize them so they can be compared across routes as a percentage:
+  //
+  let maxYieldToDest = 0.0
+  for (const route of routes) {
+    if (route.length > 0) {
+      // The first one is the yield across the entire route
+      const seg: t.VFSegment = route[0]
+
+      if (seg.yieldToDest &&
+          !isNaN(seg.yieldToDest) &&
+          seg.yieldToDest > maxYieldToDest) {
+        maxYieldToDest = seg.yieldToDest
+      }
+    }
+  }
 
   const prunedRoutes: t.VFRoutes = routes.filter((route: t.VFRoute) => {
-    return (route.length > 0 &&
-            route[0].gainToDest &&
-            route[0].gainToDest > options.minGainToDest)
+    if (route.length < 1) {
+      return false
+    }
+
+    const firstSeg: t.VFSegment = route[0]
+    const totalGainToDest = (firstSeg.gainToDest) ? firstSeg.gainToDest : 0
+    const normalizedYieldToDest = (firstSeg.yieldToDest ? firstSeg.yieldToDest : 0) / maxYieldToDest
+
+    // log.debug(`Route:\n` +
+    //           `  normalizedYTFD = ${normalizedYieldToDest}\n` +
+    //           `  totalGainToDest = ${totalGainToDest}\n` +
+    //           `  options.minGTD = ${options.minGainToDest}\n` )
+
+    if (totalGainToDest < options.minGainToDest) {
+      return false
+    }
+
+    // Pricing problem detection (good slippage route with pricing totally messed,
+    // i.e. DAI --> ZRX via:  DAI -> BSG -> WETH -> ZRX)
+    // then if the yield is way off the gain, throw the route out.
+    //
+    // Because these values are normalized, this is a relativistic figure and thus
+    // throws away any severe outliers.
+    //
+    if (normalizedYieldToDest < totalGainToDest) {
+      log.warn(`Pruning problem pricing route:\n` +
+               `  normalizedYTFD = ${normalizedYieldToDest}\n` +
+               `  totalGainToDest = ${totalGainToDest}` )
+              //  `  route:\n${JSON.stringify(route, null, 2)}`)
+      return false
+    }
+
+    return true
   })
 
   prunedRoutes.sort((routeA: t.VFRoute, routeB: t.VFRoute) => {
