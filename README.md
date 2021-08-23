@@ -1,6 +1,8 @@
 # Uniswap V2 Route Optimization
 This work is part of Uniswap's grant program. It will focus on the Uniswap V2 protocol, but aims for extensibilty to Uniswap V3.
 
+You can learn more about the features and concepts here: https://twitter.com/getsimpleid/status/1429893819559038982
+
 ## Product Playground
 https://playground.valve.finance/
 
