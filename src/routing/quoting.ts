@@ -1,6 +1,6 @@
 import * as ds from '../utils/debugScopes'
 import * as t from '../utils/types'
-import { WETH_ADDR, USDC_ADDR } from '../utils/constants'
+import { WETH_ADDR, USDC_ADDR, NO_BLOCK_NUM } from '../utils/constants'
 import { getAddress } from '@ethersproject/address'
 import { getIntegerString } from '../utils/misc'
 import { getUpdatedPairData } from '../graphProtocol/uniswapV2'
@@ -184,7 +184,7 @@ export const computeTradeEstimates = (pairData: t.Pair,
 
 
 const avgBlockMs = 15000    // TODO: <-- to constants/config
-export const getAllPairsIdsOfAge = (allPairData: t.Pairs,
+export const getRoutePairIdsOfAge = (allPairData: t.Pairs,
                                     routes: t.VFRoutes,
                                     ageMs: number = 1 * avgBlockMs): Set<string> =>
 {
@@ -206,7 +206,20 @@ export const getAllPairsIdsOfAge = (allPairData: t.Pairs,
     }
   }
 
-  // log.debug(`getAllPairsIdsOfAge: returning ${pairIds.size} older than ${ageMs} ms.`)
+  // log.debug(`getRoutePairIdsOfAge: returning ${pairIds.size} older than ${ageMs} ms.`)
+
+  return pairIds
+}
+
+export const getRoutePairIds = (allPairData: t.Pairs,
+                                routes: t.VFRoutes): Set<string> =>
+{
+  const pairIds = new Set<string>()
+  for (const route of routes) {
+    for (const segment of route) {
+      pairIds.add(segment.pairId)
+    }
+  }
 
   return pairIds
 }
@@ -243,6 +256,7 @@ export const quoteRoutes = async (allPairData: t.Pairs,
                                  amount: string,
                                  maxImpact: number = 10.0,
                                  updatePairData: boolean = true,
+                                 blockNumber: number = NO_BLOCK_NUM,
                                  cacheEstimates: boolean = true): Promise<t.VFRoutes> =>
 {
   const quotedRoutes: t.VFRoutes = []
@@ -252,19 +266,26 @@ export const quoteRoutes = async (allPairData: t.Pairs,
   // precision:
   // const maxImpactFrac = new Fraction(JSBI.BigInt(Math.floor(maxImpact * 1e18)), JSBI.BigInt(1e18))
 
-  /* TODO:
-   *  - expand and extend this into a proper TTL based cache in Redis or other.
-   *  - examine this for higher performance opportunity
-   * 
-   * For now, aggregate the pairIds in the route and fetch their current stats
-   * in aggregate.  
-   * 
-   * TODO: add the block id to the lookup and put it in the updatedBlock.
-   * 
-   */
-  if (updatePairData) {
+  if (blockNumber !== NO_BLOCK_NUM) {
     const start: number = Date.now()
-    const pairIdsToUpdate: Set<string> = getAllPairsIdsOfAge(allPairData, routes)
+    const pairIdsToUpdate: Set<string> = getRoutePairIds(allPairData, routes)
+    const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate, blockNumber)
+    const updateTimeMs = Date.now()
+    allPairData.updatePairs(updatedPairs, updateTimeMs)
+    log.debug(`quoteRoutes: Finished updating ${pairIdsToUpdate.size} pairs to block ${blockNumber} in ${Date.now() - start} ms`)
+  } else if (updatePairData) {
+    /* TODO:
+    *  - expand and extend this into a proper TTL based cache in Redis or other.
+    *  - examine this for higher performance opportunity
+    * 
+    * For now, aggregate the pairIds in the route and fetch their current stats
+    * in aggregate.  
+    * 
+    * TODO: add the block id to the lookup and put it in the updatedBlock.
+    * 
+    */
+    const start: number = Date.now()
+    const pairIdsToUpdate: Set<string> = getRoutePairIdsOfAge(allPairData, routes)
     const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate)
     const updateTimeMs = Date.now()
     allPairData.updatePairs(updatedPairs, updateTimeMs)

@@ -27,7 +27,6 @@ import { v4 as uuidv4 } from 'uuid'
 import crawl from 'tree-crawl'
 import { RouteData, RouteStats, TradeStats, TradeYieldData } from '../routing/types'
 import * as fs from 'fs'
-import { logger } from 'ethereum-abi-types-generator/node_modules/ethersv5'
 
 // TODO: back with Redis instead of mem
 const rateLimitMem = require('./../middleware/rateLimiterMem.js')
@@ -126,6 +125,11 @@ const _preprocessRouteReq = (source: string,
     ignore_max_hops: {
       value: false,
       type: 'boolean'
+    },
+    block: {
+      value: -1,      // indicates unspecified
+      min: 0,
+      type: 'int'
     }
   }
 
@@ -151,9 +155,15 @@ const _preprocessRouteReq = (source: string,
           continue
         }
 
-        // Special case for max hops--ignore it if specified:
-        if ( !(property === 'max_hops' &&
-               options.hasOwnProperty('ignore_max_hops') && options['ignore_max_hops'] === 'true') ) {
+        if (property === 'block') {                           // Special case for block; only check minimum.
+          if (value <= propertyParams.min) {
+            sanitizeStr += `options.${property} must be parsable from a string to a ${propertyParams.type} ` +
+                            `greater than ${propertyParams.min}.\n`
+            continue
+          }
+        } else if ( !(property === 'max_hops' &&              // Special case for max hops--ignore it if specified:
+               options.hasOwnProperty('ignore_max_hops') && 
+               options['ignore_max_hops'] === 'true') ) {
           if (value > propertyParams.max || value < propertyParams.min) {
             sanitizeStr += `options.${property} must be parsable from a string to a ${propertyParams.type} ` +
                             `between ${propertyParams.min} and ${propertyParams.max}, inclusive.\n`
@@ -275,7 +285,8 @@ const _processRouteReq = async(uniData: t.UniData,
                                                       _routes,
                                                       amount,
                                                       options.max_impact.value,
-                                                      options.update_data.value)
+                                                      options.update_data.value,
+                                                      options.block.value)
 
   _quotedRoutes.sort((a: t.VFRoute, b: t.VFRoute) => {    // Sort descending by amount of destination token received
     const aLastDstAmount = a[a.length-1].dstAmount
@@ -300,7 +311,8 @@ const _processRouteReq = async(uniData: t.UniData,
     await rg.annotateRoutesWithUSD(uniData.pairData,
                                   uniData.wethPairData,
                                   _requestedQuotedRoutes,
-                                  options.update_data.value)
+                                  options.update_data.value,
+                                  options.block.value)
   }
 
   return { routes: _requestedQuotedRoutes, uniRoute: _uniRoute.routeText, routeStats: _routeStats}
@@ -394,6 +406,8 @@ const _processMultiPathRouteReq = async(_uniData: t.UniData,
     usd: 0.0,
     token: 0.0
   }
+  // Skipping update code below b/c the sp route calculations just updated these
+  // pairs...
   if (mpRouteTree) {
     await rt.costTradeTree(_uniData.pairData,
                            _uniData.tokenData,
@@ -853,15 +867,30 @@ export const startSocketServer = async(port: string): Promise<void> => {
   // Lightweight copy of _uniData that permits quote updates on real-time side:
   //
   let serializedPairData = deepCopy(_uniData.pairData.serialize())
-  const pairDataDC = new t.Pairs()
-  pairDataDC.deserialize(serializedPairData)
+  const pairDataPlayground = new t.Pairs()
+  pairDataPlayground.deserialize(serializedPairData)
 
   let _uniDataQuotable: t.UniData = {
     pairGraph: _uniData.pairGraph,
     tokenData: _uniData.tokenData,
-    pairData: pairDataDC,               // Can modify with up-to-date quotes w/o affecting report
+    pairData: pairDataPlayground,               // Can modify with up-to-date quotes w/o affecting report
     wethPairData: _uniData.wethPairData
   }
+
+  // Another lightweight copy to service the market tracker (prevents conflict with 
+  // playground pairs etc.):
+  //
+  serializedPairData = deepCopy(_uniData.pairData.serialize())
+  const pairDataTracker = new t.Pairs()
+  pairDataTracker.deserialize(serializedPairData)
+
+  let _uniDataMarketTracker: t.UniData = {
+    pairGraph: _uniData.pairGraph,
+    tokenData: _uniData.tokenData,
+    pairData: pairDataTracker,               // Can modify with up-to-date or any block quotes w/o affecting report or playground
+    wethPairData: _uniData.wethPairData
+  }
+
 
   //  NOTE: 
   //        - May need to look at rate limiting socket requests/commands too. (TODO)
@@ -957,6 +986,45 @@ export const startSocketServer = async(port: string): Promise<void> => {
 
       _options.max_results.value = 20 
       const routeData = await _processMultiPathRouteReq(_uniDataQuotable,
+                                                        _routeCache,
+                                                        source,
+                                                        dest,
+                                                        amount,
+                                                        _options)
+      const pages = _routeDataToPages(routeData)
+
+      socket.emit(reqType, {
+        requestId,
+        pages
+      })
+      log.debug(`Processed request in ${Date.now() - _startMs} ms`)
+    })
+
+    socket.on('multipath-tracker', async(source: string,
+                                       dest: string,
+                                       amount: string,
+                                       options?: any) => {
+      // TODO: refactor -- largely a c+p of 'multipath' handler:
+      const requestId = _getRequestId()
+      const reqType = 'multipath-tracker'
+      socket.emit(reqType, { requestId, status: 'Analyzing input parameters.' })
+
+      log.debug(`\nMultipath Tracker Route Request: ${amount} ${source} to ${dest}` +
+                `\n  options: ${JSON.stringify(options, null, 0)}\n`)
+      
+      const _startMs = Date.now()
+      const sanitizeObj = _preprocessRouteReq(source, dest, amount, options)
+      const _options = sanitizeObj.options
+      const _error = sanitizeObj.error
+      
+      if (_error !== '') {
+        log.warn(_error)
+        socket.emit(reqType, { requestId, status: 'Error, input parameters are incorrect.', error: _error })
+        return
+      }
+
+      _options.max_results.value = 20 
+      const routeData = await _processMultiPathRouteReq(_uniDataMarketTracker,
                                                         _routeCache,
                                                         source,
                                                         dest,

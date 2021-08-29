@@ -2,6 +2,7 @@ import * as ds from '../utils/debugScopes'
 import * as rest from '../utils/rest'
 import * as config from '../config.json'
 import * as t from './../utils/types'
+import { NO_BLOCK_NUM } from '../utils/constants'
 
 const log = ds.getLog('uniswapV2')
 
@@ -160,14 +161,18 @@ export const fetchAllRawPairsV2 = async(): Promise<t.Pairs> =>
 }
 
 export const _getPairUpdate = async (pairIds: string[],
+                                     blockNumber: number = NO_BLOCK_NUM,
                                      missingDataRetries: number = 5): Promise<t.PairLite[] | undefined> =>
 {
+  const timeTravelQuery = (blockNumber !== NO_BLOCK_NUM) ? `block: { number: ${blockNumber} }` : ''
+
   // Probably faster to not do id_in below but build individual queries w/ equality (
   // Postgres n^2 problem): (TODO change query and test)
   const payload = {
     query: `{
       pairs(first: 1000
-            where: {id_in: ["${pairIds.join('", "')}"]}) {
+            where: {id_in: ["${pairIds.join('", "')}"]}
+            ${timeTravelQuery}) {
         id,
         reserve0,
         reserve1,
@@ -208,6 +213,7 @@ export const _getPairUpdate = async (pairIds: string[],
 }
 
 export const getUpdatedPairData = async (pairIds: Set<string>,
+                                         blockNumber: number = NO_BLOCK_NUM,
                                          missingDataRetries:number=5): Promise<t.PairLite[]> =>
 {
   const pairs: t.PairLite[] = []
@@ -221,7 +227,7 @@ export const getUpdatedPairData = async (pairIds: Set<string>,
     offset += 1000
 
     // log.debug(`getUpdatedPairData:  updating ${pairIdSubArr.length} / ${pairIds.size} pairs.`)
-    promises.push(_getPairUpdate(pairIdSubArr, missingDataRetries)
+    promises.push(_getPairUpdate(pairIdSubArr, blockNumber, missingDataRetries)
                                  .catch((error) => {
                                    log.warn(`ERROR in concurrent call to _getPairUpdate:\n${error}`)
                                    return undefined

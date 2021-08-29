@@ -1,6 +1,6 @@
 import * as ds from '../utils/debugScopes'
 import * as t from '../utils/types'
-import { WETH_ADDR, USDC_ADDR, WETH_ADDRS_LC } from '../utils/constants'
+import { WETH_ADDR, USDC_ADDR, WETH_ADDRS_LC, NO_BLOCK_NUM } from '../utils/constants'
 import { getUpdatedPairData } from '../graphProtocol/uniswapV2'
 import { filterToPairIdsOfAge, getEstimatedUSD } from './quoting'
 import { stringify } from 'uuid'
@@ -220,8 +220,32 @@ export const unstackRoutes = (stackedRoutes: t.VFStackedRoutes): t.VFRoutes =>
 export const annotateRoutesWithUSD = async (allPairData: t.Pairs,
                                             wethPairDict: t.WethPairIdDict,
                                             routes: t.VFRoutes,
-                                            updatePairData: boolean=true): Promise<void> => {
-  if (updatePairData) {
+                                            updatePairData: boolean=true,
+                                            blockNumber: number = NO_BLOCK_NUM): Promise<void> => {
+  if (blockNumber !== NO_BLOCK_NUM) {
+    const start: number = Date.now()
+    // Get all the <token>:WETH pair IDs, get the WETH/USDC pair ID
+    //
+    const pairIdsUSD: Set<string> = new Set<string>()
+    for (const route of routes) {
+      for (const seg of route) {
+        if (seg.src !== WETH_ADDR) {
+          pairIdsUSD.add(wethPairDict[seg.src])
+        }
+
+        if (seg.dst !== WETH_ADDR) {
+          pairIdsUSD.add(wethPairDict[seg.dst])
+        }
+      }
+    }
+    pairIdsUSD.add(wethPairDict[USDC_ADDR])
+
+    const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsUSD, blockNumber)
+    const updateTimeMs = Date.now()
+    allPairData.updatePairs(updatedPairs, updateTimeMs)
+    log.debug(`annotateRoutesWithUSD: Finished updating ${pairIdsUSD.size} pairs to block ${blockNumber} in ${Date.now() - start} ms`)
+
+  } else if (updatePairData) {
     const start: number = Date.now()
     // Get all the <token>:WETH pair IDs, get the WETH/USDC pair ID
     //

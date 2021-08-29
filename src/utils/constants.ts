@@ -1,5 +1,8 @@
 import * as t from './types'
 
+// Block number to ignore update to block
+export const NO_BLOCK_NUM = -1
+
 // HTTP Status Codes
 //   TODO: use a real lib w/ more resolution/detail
 export const OK = 200
