@@ -19,6 +19,11 @@ export const WETH_ADDRS_LC = [WETH_ADDR,
                               "0xd73d6d4c463df976399acd80ea338384e247c64b",
                               "0x477b466750c31c890db3208816d60c8585be7f0e" ]
 
+// Pairs that are invalid (i.e. long ago expired and mess up calculations / outcomes)
+export const bogusPairIds = [ 
+  '0xfa2b9e5f4b60767d4c3ca6e316d8599311419b3e'  // Paradise Token (PDT)
+]
+
 // Addresses for testing:
 //
 export const tokenAddrs = {

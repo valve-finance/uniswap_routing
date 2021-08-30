@@ -283,14 +283,11 @@ const _processRouteReq = async(uniData: t.UniData,
   /*
    *  Remove routes containing bogus pairs (unless they're the offical uni routes)
    */
-  const bogusPairIds = [
-    '0xfa2b9e5f4b60767d4c3ca6e316d8599311419b3e'  // Paradise Token (PDT)
-  ]
   const _filteredRoutes: t.VFRoutes = []
   for (const route of _routes) {
     let filterOutRoute = false
     for (const seg of route) {
-      if (bogusPairIds.includes(seg.pairId)) {
+      if (c.bogusPairIds.includes(seg.pairId)) {
         filterOutRoute = true
         break
       }
