@@ -76,7 +76,9 @@ export class Pairs {
   }
 
   // TODO: remove this and move to cache w/ TTL
-  public updatePairs(updatedPairs: PairLite[], updateTimeMs: number): void {
+  public updatePairs(updatedPairs: PairLite[], 
+                     updateTimeMs: number,
+                     updateBlockNum?: number): void {
     this._updatedSinceLBN = true
     for (const updatedPair of updatedPairs) {
       const pair = this._pairs[updatedPair.id]
@@ -87,6 +89,9 @@ export class Pairs {
         pair.token0Price = updatedPair.token0Price
         pair.token1Price = updatedPair.token1Price
         pair.updatedMs = updateTimeMs
+        if (updateBlockNum) {
+          pair.updatedBlock = updateBlockNum
+        }
       } else {
         log.error(`updatePairs: ${updatedPair.id} pair not found!`)
       }

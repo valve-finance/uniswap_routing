@@ -211,12 +211,22 @@ export const getRoutePairIdsOfAge = (allPairData: t.Pairs,
   return pairIds
 }
 
-export const getRoutePairIds = (allPairData: t.Pairs,
-                                routes: t.VFRoutes): Set<string> =>
+export const getRoutePairIdsNotBlockNum = (allPairData: t.Pairs,
+                                           blockNum: number,
+                                           routes: t.VFRoutes): Set<string> =>
 {
   const pairIds = new Set<string>()
   for (const route of routes) {
     for (const segment of route) {
+
+      // Don't add the segment if it's been updated to the specified block number
+      const pairData = allPairData.getPair(segment.pairId)
+      if (pairData &&
+          pairData.updatedBlock &&
+          pairData.updatedBlock === blockNum) {
+          continue
+      }
+
       pairIds.add(segment.pairId)
     }
   }
@@ -245,6 +255,26 @@ export const filterToPairIdsOfAge = (allPairData: t.Pairs,
   return pairIdsOfAge
 }
 
+export const filterToPairIdsNotBlockNum = (allPairData: t.Pairs,
+                                           pairIds: Set<string>,
+                                           blockNum: number): Set<string> =>
+{
+  const pairIdsNotBlockNum = new Set<string>()
+  for (const pairId of pairIds) {
+    const pairData = allPairData.getPair(pairId)
+    if (pairData &&
+        pairData.updatedBlock &&
+        pairData.updatedBlock !== blockNum) {
+      continue
+    }
+
+    pairIdsNotBlockNum.add(pairId)
+  }
+
+  return pairIdsNotBlockNum
+}
+
+
 /*
  * TODO: 
  *   - examine TODO's below, esp. handling of precision (we lose precision here vs. UNI b/c
@@ -268,10 +298,10 @@ export const quoteRoutes = async (allPairData: t.Pairs,
 
   if (blockNumber !== NO_BLOCK_NUM) {
     const start: number = Date.now()
-    const pairIdsToUpdate: Set<string> = getRoutePairIds(allPairData, routes)
+    const pairIdsToUpdate: Set<string> = getRoutePairIdsNotBlockNum(allPairData, blockNumber, routes)
     const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate, blockNumber)
     const updateTimeMs = Date.now()
-    allPairData.updatePairs(updatedPairs, updateTimeMs)
+    allPairData.updatePairs(updatedPairs, updateTimeMs, blockNumber)
     log.debug(`quoteRoutes: Finished updating ${pairIdsToUpdate.size} pairs to block ${blockNumber} in ${Date.now() - start} ms`)
   } else if (updatePairData) {
     /* TODO:

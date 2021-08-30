@@ -2,7 +2,7 @@ import * as ds from '../utils/debugScopes'
 import * as t from '../utils/types'
 import { WETH_ADDR, USDC_ADDR, WETH_ADDRS_LC, NO_BLOCK_NUM } from '../utils/constants'
 import { getUpdatedPairData } from '../graphProtocol/uniswapV2'
-import { filterToPairIdsOfAge, getEstimatedUSD } from './quoting'
+import { filterToPairIdsOfAge, getRoutePairIdsNotBlockNum, getEstimatedUSD, filterToPairIdsNotBlockNum } from './quoting'
 import { stringify } from 'uuid'
 
 const log = ds.getLog('routeGraph')
@@ -240,11 +240,11 @@ export const annotateRoutesWithUSD = async (allPairData: t.Pairs,
     }
     pairIdsUSD.add(wethPairDict[USDC_ADDR])
 
-    const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsUSD, blockNumber)
+    const pairIdsToUpdate = filterToPairIdsNotBlockNum(allPairData, pairIdsUSD, blockNumber)
+    const updatedPairs: t.PairLite[] = await getUpdatedPairData(pairIdsToUpdate, blockNumber)
     const updateTimeMs = Date.now()
     allPairData.updatePairs(updatedPairs, updateTimeMs)
-    log.debug(`annotateRoutesWithUSD: Finished updating ${pairIdsUSD.size} pairs to block ${blockNumber} in ${Date.now() - start} ms`)
-
+    log.debug(`annotateRoutesWithUSD: Finished updating ${pairIdsToUpdate.size} pairs to block ${blockNumber} in ${Date.now() - start} ms`)
   } else if (updatePairData) {
     const start: number = Date.now()
     // Get all the <token>:WETH pair IDs, get the WETH/USDC pair ID
