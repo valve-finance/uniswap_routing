@@ -13,6 +13,7 @@ const graphlib = require('@dagrejs/graphlib')
 const log = ds.getLog('data')
 const ALL_PAIRS_FILE = 'all_pairs_v2.json'
 const ALL_TOKENS_FILE = 'all_tokens.json'
+const DEAD_TOKENS_FILE = 'dead_tokens.json'
 const MAX_DATA_AGE = Duration.fromObject({ days: 5 })
 
 export const initUniData = async(force=false, buildWethPairDict=true): Promise<t.UniData> => {
@@ -49,7 +50,8 @@ const getPairData = async(options?: any): Promise<t.Pairs> => {
   const _defaultOpts = {
     ignorePersisted: false,
     ignoreExpiry: false,
-    persist: true
+    persist: true,
+    ignoreDeadTokens: true
   }
   const _options = {..._defaultOpts, ...options}
 
@@ -84,7 +86,25 @@ const getPairData = async(options?: any): Promise<t.Pairs> => {
     }
   }
 
-  return _allPairs
+  if (_options.ignoreDeadTokens) {
+    const _deadTokensObj = await p.retrieveObject(DEAD_TOKENS_FILE)
+    const _livePairs = new t.Pairs()
+
+    for (const _pairId in _allPairs.getPairIds()) {
+      const _pair = _allPairs.getPair(_pairId)
+      if (_deadTokensObj.object.hasOwnProperty(_pair.token0.id) ||
+          _deadTokensObj.object.hasOwnProperty(_pair.token1.id)) {
+        continue
+      }
+      _livePairs.addPair(_pair)
+    }
+
+    _livePairs.setLowestBlockNumber(_allPairs.getLowestBlockNumber())
+
+    return _livePairs
+  } else {
+    return _allPairs
+  }
 }
 
 const getTokenData = async(options?: any): Promise<t.Tokens> => {
