@@ -300,7 +300,6 @@ const _processRouteReq = async(uniData: t.UniData,
   }
   log.debug(`After filtering out bogus pairs, ${_filteredRoutes.length} remain of ${_routes.length} originally found.`)
 
-  log.debug(`options:\n${JSON.stringify(options, null, 2)}`)
   const _quotedRoutes: t.VFRoutes = await quoteRoutes(uniData.pairData, 
                                                       uniData.tokenData,
                                                       _filteredRoutes,
