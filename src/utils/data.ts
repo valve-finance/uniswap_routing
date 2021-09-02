@@ -90,7 +90,7 @@ const getPairData = async(options?: any): Promise<t.Pairs> => {
     const _deadTokensObj = await p.retrieveObject(DEAD_TOKENS_FILE)
     const _livePairs = new t.Pairs()
 
-    for (const _pairId in _allPairs.getPairIds()) {
+    for (const _pairId of _allPairs.getPairIds()) {
       const _pair = _allPairs.getPair(_pairId)
       if (_deadTokensObj.object.hasOwnProperty(_pair.token0.id) ||
           _deadTokensObj.object.hasOwnProperty(_pair.token1.id)) {
@@ -98,6 +98,9 @@ const getPairData = async(options?: any): Promise<t.Pairs> => {
       }
       _livePairs.addPair(_pair)
     }
+
+    const removedPairs: number = _allPairs.getPairIds().length - _livePairs.getPairIds().length
+    log.info(`Ignore pairs with dead tokens removed ${removedPairs} pairs`)
 
     _livePairs.setLowestBlockNumber(_allPairs.getLowestBlockNumber())
 
@@ -111,7 +114,8 @@ const getTokenData = async(options?: any): Promise<t.Tokens> => {
   const _defaultOpts = {
     ignorePersisted: false,
     ignoreExpiry: false,
-    persist: true
+    persist: true,
+    ignoreDeadTokens: true
   }
   const _options = {..._defaultOpts, ...options}
 
@@ -146,7 +150,25 @@ const getTokenData = async(options?: any): Promise<t.Tokens> => {
     }
   }
 
-  return _allTokens
+  if (_options.ignoreDeadTokens) {
+    const _deadTokensObj = await p.retrieveObject(DEAD_TOKENS_FILE)
+    const _liveTokens = new t.Tokens()
+
+    for (const _tokenId of _allTokens.getTokenIds()) {
+      if (_deadTokensObj.object.hasOwnProperty(_tokenId)) {
+        continue
+      }
+
+      _liveTokens.addToken(_allTokens.getToken(_tokenId))
+    }
+
+    const removedTokens: number = _allTokens.getTokenIds().length - _liveTokens.getTokenIds().length
+    log.info(`Ignore dead tokens removed ${removedTokens} tokens`)
+
+    return _liveTokens 
+  } else {
+    return _allTokens
+  }
 }
 
 const constructPairGraph = async(allPairData: t.Pairs): Promise<t.PairGraph> =>

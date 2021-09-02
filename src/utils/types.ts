@@ -166,6 +166,10 @@ export class Tokens {
     this._tokens[_token.id] = _token
   }
 
+  public getTokenIds(): string[] {
+    return Object.keys(this._tokens)
+  }
+
   public getToken(id: string): Token {
     return this._tokens[id]
   }
