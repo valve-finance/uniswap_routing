@@ -280,29 +280,9 @@ const _processRouteReq = async(uniData: t.UniData,
     log.warn(`No UNI route available for ${amount} ${source} --> ${dest}.`)
   }
 
-  /*
-   *  Remove routes containing bogus pairs (unless they're the offical uni routes)
-   */
-  const _filteredRoutes: t.VFRoutes = []
-  for (const route of _routes) {
-    let filterOutRoute = false
-    for (const seg of route) {
-      if (c.bogusPairIds.includes(seg.pairId)) {
-        filterOutRoute = true
-        break
-      }
-    }
-    if (filterOutRoute) {
-      continue
-    }
-
-    _filteredRoutes.push(route)
-  }
-  log.debug(`After filtering out bogus pairs, ${_filteredRoutes.length} remain of ${_routes.length} originally found.`)
-
   const _quotedRoutes: t.VFRoutes = await quoteRoutes(uniData.pairData, 
                                                       uniData.tokenData,
-                                                      _filteredRoutes,
+                                                      _routes,
                                                       amount,
                                                       options.max_impact.value,
                                                       options.update_data.value,

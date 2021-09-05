@@ -3,7 +3,7 @@ import * as uniGraphV2 from './../graphProtocol/uniswapV2'
 import * as ds from './debugScopes'
 import * as p from './persistence'
 import * as t from './types'
-import { WETH_ADDR } from './constants'
+import { WETH_ADDR, bogusTokens } from './constants'
 
 import { DateTime, Interval, Duration } from 'luxon'
 import { config } from 'dotenv'
@@ -92,15 +92,22 @@ const getPairData = async(options?: any): Promise<t.Pairs> => {
 
     for (const _pairId of _allPairs.getPairIds()) {
       const _pair = _allPairs.getPair(_pairId)
+
       if (_deadTokensObj.object.hasOwnProperty(_pair.token0.id) ||
           _deadTokensObj.object.hasOwnProperty(_pair.token1.id)) {
         continue
       }
+
+      if (bogusTokens.hasOwnProperty(_pair.token0.id) ||
+          bogusTokens.hasOwnProperty(_pair.token1.id)) {
+        continue
+      }
+
       _livePairs.addPair(_pair)
     }
 
     const removedPairs: number = _allPairs.getPairIds().length - _livePairs.getPairIds().length
-    log.info(`Ignore pairs with dead tokens removed ${removedPairs} pairs`)
+    log.info(`Ignore pairs with dead & bogus tokens removed ${removedPairs} pairs`)
 
     _livePairs.setLowestBlockNumber(_allPairs.getLowestBlockNumber())
 
