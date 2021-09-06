@@ -21,7 +21,7 @@ export const WETH_ADDRS_LC = [WETH_ADDR,
 
 // Pairs that are invalid (i.e. long ago expired and mess up calculations / outcomes)
 //
-export const bogusTokens = {
+export const bogusTokens: any = {
   '0xfa2b9e5f4b60767d4c3ca6e316d8599311419b3e': 'Paradise Token (PDT)'
 }
 

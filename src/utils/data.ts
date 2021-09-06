@@ -100,6 +100,7 @@ const getPairData = async(options?: any): Promise<t.Pairs> => {
 
       if (bogusTokens.hasOwnProperty(_pair.token0.id) ||
           bogusTokens.hasOwnProperty(_pair.token1.id)) {
+          log.debug(`Removing bogus token pair:`, _pair)
         continue
       }
 
