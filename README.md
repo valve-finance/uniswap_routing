@@ -6,10 +6,14 @@ You can learn more about the features and concepts here: https://twitter.com/get
 ## Product Playground
 https://playground.valve.finance/
 
+## Historical Trade Dashboard
+
+You can view the trade dashboard here: https://playground.valve.finance/dashboard
+
 ## Routing Performance Analysis
 
-You can view the different reports here: https://playground.valve.finance/?mode=performance
+You can view the different reports here: https://playground.valve.finance/performance
 
 ## Trading Performance Analysis
 
-You can simulate the different trades here: https://playground.valve.finance/?mode=simulation
+You can simulate the different trades here: https://playground.valve.finance/simulation
